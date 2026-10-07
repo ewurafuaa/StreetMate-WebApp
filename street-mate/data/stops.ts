@@ -1,15 +1,8 @@
-// Central access point for the OpenStreetMap bus stop dataset.
-// Normalises the raw file once at module load so screens never touch
-// the awkward "Stop names" key or worry about unnamed nodes.
+// Central access point for the GTFS-derived bus stop dataset (see
+// scripts/gtfs/build_gtfs_data.py). bus_stops.json is already cleaned —
+// unnamed entries dropped, ids deduped — so this just types it.
 
-import rawStops from '@/assets/data/ghana_bus_stops.json';
-
-type RawStop = {
-  ID: string;
-  'Stop names': string | null;
-  latitude: number;
-  longitude: number;
-};
+import rawStops from '@/assets/data/bus_stops.json';
 
 export type Stop = {
   id: string;
@@ -18,16 +11,7 @@ export type Stop = {
   lng: number;
 };
 
-// 636 of the 4,013 OSM nodes carry coordinates but no name. They're unusable
-// for search and meaningless as map labels, so they're dropped here.
-export const stops: Stop[] = (rawStops as RawStop[])
-  .filter((s) => s['Stop names'] && typeof s.latitude === 'number' && typeof s.longitude === 'number')
-  .map((s) => ({
-    id: s.ID,
-    name: (s['Stop names'] as string).trim(),
-    lat: s.latitude,
-    lng: s.longitude,
-  }));
+export const stops: Stop[] = rawStops as Stop[];
 
 // Placeholder origin until GPS is wired up — roughly Adenta Municipality,
 // matching the "Current location" label shown on the search screen.

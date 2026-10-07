@@ -1,235 +1,113 @@
-import { useEffect, useState } from 'react';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { Animated, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { useState } from 'react';
+import { ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppText as Text } from '@/components/app-text';
 import { Sidebar } from '@/components/sidebar';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Palette } from '@/constants/theme';
+import { Chip, Icon, IconBadge, IconButton, ListRow, PillButton } from '@/components/ui';
+import { Palette, Radius } from '@/constants/theme';
+import { formatTripDate, useTripHistory, type TripRecord } from '@/contexts/trip-history';
 
-const recentTrips = [
-  {
-    id: '1',
-    route: ['Pantang Junction', 'UPS'],
-    duration: '35 mins',
-    price: 'GH¢ 5.00',
-  },
-  {
-    id: '2',
-    route: ['Legon 1st', 'Las Palmas', 'Bafana'],
-    duration: '1 hr 15 mins',
-    price: 'GH¢ 11.00',
-  },
-];
+const popularPlaces = ['Madina', 'Circle', 'Atomic Junction', 'Achimota', 'Kaneshie', 'Tema Station'];
 
-const popularDestinations = ['Madina', 'Circle', 'Atomic Junction', 'Achimota'];
-const heroMessages = ["LET'S HIT THE STREETS!", 'YEN KƆ!'];
+const shortcuts = [
+  { label: 'Recent trips', icon: 'time-outline', path: '/recent-trips' },
+  { label: 'Saved places', icon: 'bookmark-outline', path: '/saved-places' },
+  { label: 'Find a stop', icon: 'location-outline', path: '/stops-map' },
+] as const;
 
 export default function HomeScreen() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [messageIndex, setMessageIndex] = useState(0);
-  const [slideAnim] = useState(() => new Animated.Value(0));
-  const [fadeAnim] = useState(() => new Animated.Value(1));
+  const { trips } = useTripHistory();
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      Animated.parallel([
-        Animated.timing(slideAnim, { toValue: -30, duration: 300, useNativeDriver: true }),
-        Animated.timing(fadeAnim, { toValue: 0, duration: 300, useNativeDriver: true }),
-      ]).start(() => {
-        setMessageIndex((prev) => (prev + 1) % heroMessages.length);
-        slideAnim.setValue(30);
-
-        Animated.parallel([
-          Animated.timing(slideAnim, { toValue: 0, duration: 300, useNativeDriver: true }),
-          Animated.timing(fadeAnim, { toValue: 1, duration: 300, useNativeDriver: true }),
-        ]).start();
-      });
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, [slideAnim, fadeAnim]);
+  const repeatTrip = (t: TripRecord) =>
+    router.push({
+      pathname: '/map',
+      params: {
+        origin: t.origin.name,
+        originLat: String(t.origin.lat),
+        originLng: String(t.origin.lng),
+        destination: t.destination.name,
+        destLat: String(t.destination.lat),
+        destLng: String(t.destination.lng),
+      },
+    });
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Header — stays static */}
-      <View style={styles.staticHeader}>
-        <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <TouchableOpacity onPress={() => setSidebarOpen(true)}>
-              <Image
-                source={require('@/assets/images/icons/menu.png')}
-                style={styles.headerIcon}
-                contentFit="contain"
-              />
-            </TouchableOpacity>
-
-            <Image
-              source={require('@/assets/images/streetmate-logo.png')}
-              style={styles.logo}
-              contentFit="contain"
-            />
-          </View>
-
-          <TouchableOpacity>
-            <Image
-              source={require('@/assets/images/icons/alert-20-regular.png')}
-              style={styles.headerIcon}
-              contentFit="contain"
-            />
-          </TouchableOpacity>
-        </View>
+      <View style={styles.header}>
+        <IconButton name="menu" onPress={() => setSidebarOpen(true)} accessibilityLabel="Open menu" />
+        <Image source={require('@/assets/images/streetmate-logo.png')} style={styles.logo} contentFit="contain" />
+        <View style={{ width: 44 }} />
       </View>
 
-      {/* Everything below the header — scrollable, hero card included */}
-      <ScrollView
-        style={styles.scrollArea}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}>
-        <View style={styles.heroCard}>
-          <Image
-            source={require('@/assets/images/hero-card.png')}
-            style={styles.heroCardImage}
-            contentFit="cover"
-            priority="high"
-            cachePolicy="memory-disk"
-            transition={150}
-          />
-          <Animated.Text
-            style={[
-              styles.heroHeading,
-              styles.heroHeadingFont,
-              { transform: [{ translateX: slideAnim }], opacity: fadeAnim },
-            ]}>
-            {heroMessages[messageIndex]}
-          </Animated.Text>
-          <Text weight="medium" style={styles.heroSubheading}>Find the right bus, find the right place.</Text>
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        <Text weight="bold" style={styles.headline}>LET&apos;S HIT THE STREETS!</Text>
 
-          <TouchableOpacity style={styles.searchBar} activeOpacity={0.8} onPress={() => router.push('/search')}>
-            <Image
-              source={require('@/assets/images/icons/search.png')}
-              style={styles.searchIcon}
-              contentFit="contain"
-            />
-            <Text style={styles.searchInputPlaceholder}>Where to?</Text>
-            <Image
-              source={require('@/assets/images/icons/arrow-circle-right.png')}
-              style={styles.arrowIcon}
-              contentFit="contain"
-            />
-          </TouchableOpacity>
+        {/* The one thing to do on this screen */}
+        <TouchableOpacity style={styles.search} activeOpacity={0.8} onPress={() => router.push('/search')}>
+          <Icon name="search" size={22} />
+          <Text weight="medium" style={styles.searchText}>Where to?</Text>
+        </TouchableOpacity>
+
+        <View style={styles.tiles}>
+          {shortcuts.map((s) => (
+            <TouchableOpacity key={s.label} style={styles.tile} activeOpacity={0.7} onPress={() => router.push(s.path)}>
+              <Icon name={s.icon} size={24} />
+              <Text weight="medium" style={styles.tileLabel}>{s.label}</Text>
+            </TouchableOpacity>
+          ))}
         </View>
 
-        {/* Recent Trips — hidden entirely when there are none */}
-        {recentTrips.length > 0 && (
+        {trips.length > 0 && (
           <View style={styles.section}>
-            <View style={styles.sectionHeaderRow}>
-              <Text weight="medium" style={styles.sectionTitle}>Recent Trips</Text>
-              <TouchableOpacity>
-                <Text weight="medium" style={styles.viewAll}>View All</Text>
+            <View style={styles.sectionHead}>
+              <Text weight="bold" style={styles.sectionTitle}>Recent</Text>
+              <TouchableOpacity onPress={() => router.push('/recent-trips')}>
+                <Text weight="medium" style={styles.link}>See all</Text>
               </TouchableOpacity>
             </View>
-
-            {recentTrips.map((trip) => (
-              <TouchableOpacity key={trip.id} style={styles.tripCard}>
-                <View style={styles.tripCardTextGroup}>
-                  <Text style={styles.tripRoute} numberOfLines={1}>
-                    {trip.route.join('  →  ')}
-                  </Text>
-                  <Text weight="medium" style={styles.tripMeta}>
-                    {trip.duration} · {trip.price}
-                  </Text>
-                </View>
-                <Image
-                  source={require('@/assets/images/icons/arrow-circle-right.png')}
-                  style={styles.arrowIcon}
-                  contentFit="contain"
-                />
-              </TouchableOpacity>
+            {trips.slice(0, 3).map((t, i, arr) => (
+              <ListRow
+                key={t.id}
+                icon="time-outline"
+                title={t.destination.name}
+                subtitle={`From ${t.origin.name} · ${formatTripDate(t.startedAt)}`}
+                onPress={() => repeatTrip(t)}
+                noDivider={i === arr.length - 1}
+              />
             ))}
           </View>
         )}
 
-        {/* Popular Destinations */}
         <View style={styles.section}>
-          <View style={styles.sectionHeaderRow}>
-              <Text weight="medium" style={styles.sectionTitle}>Popular Destinations</Text>
-              <TouchableOpacity>
-                <Text weight="medium" style={styles.viewAll}>View All</Text>
-              </TouchableOpacity>
-            </View>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.horizontalScroll}
-            contentContainerStyle={styles.destinationList}>
-            {popularDestinations.map((place) => (
-              <TouchableOpacity key={place} style={styles.destinationCard}>
-                <Image
-                  source={require('@/assets/images/map-thumbnail.png')}
-                  style={styles.destinationImage}
-                  contentFit="cover"
-                />
-                <View style={styles.destinationTextGroup}>
-                  <Text weight="regular" style={styles.destinationName}>{place}</Text>
-                  <Text style={styles.destinationSubtitle}>View route</Text>
-                </View>
-                <Image
-                  source={require('@/assets/images/icons/arrow-circle-right.png')}
-                  style={styles.destinationArrow}
-                  contentFit="contain"
-                />
-              </TouchableOpacity>
+          <Text weight="bold" style={styles.sectionTitle}>Popular places</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
+            {popularPlaces.map((place) => (
+              <Chip key={place} label={place} icon="location-outline" onPress={() => router.push({ pathname: '/search', params: { q: place } })} />
             ))}
           </ScrollView>
         </View>
 
-        {/* Info cards */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.horizontalScroll}
-          contentContainerStyle={styles.infoCardRow}>
-          <TouchableOpacity style={styles.infoCard}>
-            <Image
-              source={require('@/assets/images/trotro-tips.png')}
-              style={styles.infoCardImage}
-              contentFit="cover"
-            />
-            <Text weight="semibold" style={styles.infoCardTitle}>Trotro Tips</Text>
-            <View style={styles.infoCardBottomRow}>
-              <Text weight="regular" style={styles.infoCardDesc}>
-                New to the trotro life? Learn a few tips to make your travel experience a better
-                and seamless one.
-              </Text>
-              <Image
-                source={require('@/assets/images/icons/arrow-circle-right.png')}
-                style={styles.infoArrowIcon}
-                contentFit="contain"
-              />
-            </View>
-          </TouchableOpacity>
+        {/* Black promo band, as on Uber */}
+        <View style={styles.promoDark}>
+          <Image source={require('@/assets/images/route-hub.png')} style={styles.promoImage} contentFit="cover" />
+          <Text weight="bold" style={styles.promoDarkTitle}>Know a route we missed?</Text>
+          <Text style={styles.promoDarkBody}>Add it, or ask for one. Every route you share helps the next rider.</Text>
+          <PillButton label="Open Route Hub" variant="secondary" onPress={() => router.push('/route-hub')} style={styles.promoButton} />
+        </View>
 
-          <TouchableOpacity style={styles.infoCard}>
-            <Image
-              source={require('@/assets/images/route-hub.png')}
-              style={styles.infoCardImage}
-              contentFit="cover"
-            />
-            <Text weight="bold" style={styles.infoCardTitle}>Route Hub</Text>
-            <View style={styles.infoCardBottomRow}>
-              <Text style={styles.infoCardDesc}>
-                Know a route we missed? Have a request? Share your thoughts and help improve
-                StreetMate.
-              </Text>
-              <Image
-                source={require('@/assets/images/icons/arrow-circle-right.png')}
-                style={styles.infoArrowIcon}
-                contentFit="contain"
-              />
+        <TouchableOpacity style={styles.promoLight} activeOpacity={0.9} onPress={() => router.push('/tips')}>
+          <Image source={require('@/assets/images/trotro-tips.png')} style={styles.promoImage} contentFit="cover" />
+          <View style={styles.promoLightRow}>
+            <View style={{ flex: 1 }}>
+              <Text weight="bold" style={styles.promoLightTitle}>New to trotros?</Text>
+              <Text style={styles.promoLightBody}>A few tips for a smoother ride.</Text>
             </View>
-          </TouchableOpacity>
-        </ScrollView>
+            <IconBadge name="arrow-forward" dark />
+          </View>
+        </TouchableOpacity>
       </ScrollView>
 
       <Sidebar visible={sidebarOpen} onClose={() => setSidebarOpen(false)} activeKey="home" />
@@ -238,218 +116,37 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Palette.White,
-  },
-  staticHeader: {
+  container: { flex: 1, backgroundColor: Palette.White },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 10 },
+  logo: { width: 140, height: 28 },
+  scroll: { paddingHorizontal: 16, paddingBottom: 40 },
+  headline: { fontSize: 30, lineHeight: 44, color: Palette.Black, marginTop: 12 },
+  search: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    height: 56,
+    borderRadius: Radius.pill,
     paddingHorizontal: 20,
+    backgroundColor: Palette.Soft,
+    marginTop: 16,
   },
-  scrollArea: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: 20,
-    paddingBottom: 40,
-    paddingTop: 4,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 20,
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 20,
-  },
-  headerIcon: {
-    width: 30,
-    height: 30,
-  },
-  logo: {
-    width: 156,
-    height: 32,
-  },
-  heroCard: {
-    borderRadius: 20,
-    padding: 20,
-    marginTop: 10,
-    marginBottom: 10,
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  heroCardImage: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    borderRadius: 20,
-  },
-  heroHeading: {
-    color: Palette.White,
-    fontSize: 24,
-    lineHeight: 30,
-    textTransform: 'uppercase',
-  },
-  heroHeadingFont: {
-    fontFamily: 'Poppins_700Bold',
-  },
-  heroSubheading: {
-    color: Palette.Placeholder,
-    fontSize: 14,
-    marginTop: 5,
-    marginBottom: 100,
-  },
-  searchBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Palette.White,
-    borderRadius: 10,
-    paddingVertical: 15,
-    paddingHorizontal: 20,
-    gap: 10,
-  },
-  searchIcon: {
-    width: 20,
-    height: 20,
-  },
-  searchInputPlaceholder: {
-    flex: 1,
-    fontSize: 16,
-    color: Palette.Placeholder,
-    fontFamily: 'Poppins_400Regular',
-  },
-  arrowIcon: {
-    width: 30,
-    height: 30,
-  },
-  section: {
-    marginTop: 20,
-  },
-  sectionHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  sectionTitle: {
-    fontSize: 18,
-    color: Palette.CustomBlack,
-    marginBottom: 10,
-  },
-  viewAll: {
-    fontSize: 14,
-    color: Palette.DarkGray,
-  },
-  tripCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1,
-    borderColor: Palette.LightGray,
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 10,
-  },
-  tripCardTextGroup: {
-    flex: 1,
-    marginRight: 12,
-  },
-  tripRoute: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Palette.CustomBlack,
-    flex: 1,
-    marginRight: 10,
-  },
-  tripMeta: {
-    fontSize: 14,
-    color: Palette.DarkGray,
-    marginTop: 5,
-  },
-  horizontalScroll: {
-    overflow: 'visible',
-  },
-  destinationList: {
-    gap: 10,
-    paddingVertical: 6,
-    paddingHorizontal: 4,
-  },
-  destinationCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: Palette.LightGray,
-    borderRadius: 20,
-    padding: 20,
-    gap: 10,
-  },
-  destinationImage: {
-    width: 50,
-    height: 50,
-    borderRadius: 10,
-  },
-  destinationTextGroup: {
-    flexShrink: 1,
-  },
-  destinationName: {
-    fontSize: 16,
-    color: Palette.CustomBlack,
-  },
-  destinationSubtitle: {
-    fontSize: 14,
-    color: Palette.DarkGray,
-    marginTop: 0,
-  },
-  destinationArrow: {
-    width: 30,
-    height: 30,
-  },
-  infoCardRow: {
-    gap: 20,
-    marginTop: 20,
-    paddingVertical: 14,
-    paddingHorizontal: 4,
-  },
-  infoCard: {
-    width: 350,
-    backgroundColor: Palette.White,
-    borderRadius: 20,
-    padding: 20,
-    shadowColor: Palette.Black,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 6,
-  },
-  infoCardImage: {
-    width: '100%',
-    height: 150,
-    borderRadius: 10,
-    marginBottom: 10,
-  },
-  infoCardTitle: {
-    fontSize: 16,
-    color: Palette.CustomBlack,
-    marginBottom: 6,
-    paddingHorizontal: 4,
-  },
-  infoCardBottomRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 20,
-    paddingHorizontal: 4,
-  },
-  infoCardDesc: {
-    flex: 1,
-    fontSize: 14,
-    color: Palette.DarkGray,
-    lineHeight: 14,
-  },
-  infoArrowIcon: {
-    width: 30,
-    height: 30,
-  },
+  searchText: { fontSize: 18, color: Palette.Black },
+  tiles: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  tile: { flex: 1, height: 88, borderRadius: Radius.xl, backgroundColor: Palette.Soft, padding: 14, justifyContent: 'space-between' },
+  tileLabel: { fontSize: 14, lineHeight: 18, color: Palette.Black },
+  section: { marginTop: 28 },
+  sectionHead: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
+  sectionTitle: { fontSize: 20, lineHeight: 28, color: Palette.Black, marginBottom: 6 },
+  link: { fontSize: 14, color: Palette.Black, textDecorationLine: 'underline' },
+  chips: { gap: 8, paddingTop: 8, paddingRight: 16 },
+  promoDark: { backgroundColor: Palette.Black, borderRadius: Radius.xl, padding: 24, marginTop: 32 },
+  promoImage: { width: '100%', aspectRatio: 4 / 3, borderRadius: Radius.lg },
+  promoDarkTitle: { fontSize: 24, lineHeight: 32, color: Palette.White, marginTop: 20 },
+  promoDarkBody: { fontSize: 15, lineHeight: 22, color: Palette.LightGray, marginTop: 6 },
+  promoButton: { marginTop: 20, alignSelf: 'flex-start', paddingHorizontal: 24 },
+  promoLight: { backgroundColor: Palette.White, borderRadius: Radius.xl, padding: 24, marginTop: 16, borderWidth: 1, borderColor: Palette.LightGray },
+  promoLightRow: { flexDirection: 'row', alignItems: 'center', gap: 16, marginTop: 20 },
+  promoLightTitle: { fontSize: 24, lineHeight: 32, color: Palette.Black },
+  promoLightBody: { fontSize: 15, lineHeight: 22, color: Palette.DarkGray, marginTop: 2 },
 });

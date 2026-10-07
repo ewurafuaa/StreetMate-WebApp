@@ -1,21 +1,44 @@
-// Central access point for the OSM-derived trotro route dataset.
-// Each route's stop list was computed offline (see scripts/match_routes.py)
-// by snapping StreetMate's own named stops onto that route's road line —
-// OSM's route relations don't include stop order themselves.
+// Central access point for the trotro route dataset. Two sources feed it:
+//
+// 1. GTFS trips (scripts/gtfs/build_gtfs_data.py → bus_trips.json) — the
+//    primary source, 554 route-directions. Each entry is one *direction* of
+//    one route (e.g. "Amasaman -> Abeka Lapaz" and "Abeka Lapaz -> Amasaman"
+//    are two separate entries), with a real GTFS trip_headsign: the name a
+//    mate actually calls out for that direction (e.g. "Achimota", not the
+//    more specific final stop node name "Achimota New Station").
+//
+// 2. Legacy OSM routes (scripts/gtfs/merge_osm_into_gtfs.py →
+//    legacy_routes.json) — 24 routes from the older OSM-snapping pipeline
+//    that have no GTFS counterpart (checked by from/to endpoint, not just
+//    route id, since the two datasets number routes completely
+//    differently). Kept for maximum route coverage so "All Routes" shows
+//    every alternative a rider could pick from, even ones the newer export
+//    didn't happen to capture. These have no real headsign — nothing in the
+//    old pipeline recorded one — so `headsign` is null here, and
+//    trip-matching.ts falls back to a position-based guess for them.
 
-import rawRoutes from '@/assets/data/ghana_bus_routes.json';
+import rawTrips from '@/assets/data/bus_trips.json';
+import rawLegacyRoutes from '@/assets/data/legacy_routes.json';
 
-type RawRoute = {
-  route_id: string;
+type RawTrip = {
+  id: string;
+  routeId: string;
+  ref: string | null;
+  name: string | null;
+  headsign: string;
+  from: string | null;
+  to: string | null;
+  stops: { id: string; name: string }[];
+};
+
+type RawLegacyRoute = {
+  id: string;
+  routeId: string;
   ref: string | null;
   name: string | null;
   from: string | null;
   to: string | null;
-  operator: string | null;
-  travel_time_min: string | null;
-  geometry: [number, number][]; // [lng, lat] pairs, OSM order
-  stops: string[]; // stop IDs, in road order
-  stop_names: (string | null)[];
+  stops: { id: string; name: string }[];
 };
 
 export type RouteStop = {
@@ -24,34 +47,55 @@ export type RouteStop = {
 };
 
 export type Route = {
+  /** `${routeId}_${directionId}` for GTFS routes, `legacy_${routeId}` for legacy ones — unique per direction, not just per route. */
   id: string;
+  routeId: string;
   ref: string | null;
   name: string;
+  /**
+   * The terminus name a mate travelling this direction calls out, from the
+   * GTFS trip_headsign. Null for legacy OSM routes, which have no recorded
+   * headsign — trip-matching.ts guesses one from stop position instead.
+   */
+  headsign: string | null;
   from: string | null;
   to: string | null;
-  operator: string | null;
-  travelTimeMin: number | null;
-  // Ready for <Polyline coordinates={...} /> — already flipped to {latitude, longitude}.
-  path: { latitude: number; longitude: number }[];
   stops: RouteStop[];
+  /** Which dataset this route came from — decides how trip-matching resolves its terminus name. */
+  source: 'gtfs' | 'legacy';
 };
 
-// A route with fewer than 2 matched stops can't be used for a journey anyway.
-export const routes: Route[] = (rawRoutes as RawRoute[])
-  .filter((r) => r.stops.length >= 2)
-  .map((r) => ({
-    id: r.route_id,
-    ref: r.ref,
-    name: r.name ?? `${r.from ?? '?'} → ${r.to ?? '?'}`,
-    from: r.from,
-    to: r.to,
-    operator: r.operator,
-    travelTimeMin: r.travel_time_min ? Number(r.travel_time_min) : null,
-    path: r.geometry.map(([lng, lat]) => ({ latitude: lat, longitude: lng })),
-    stops: r.stops.map((id, i) => ({ id, name: r.stop_names[i] ?? '' })),
+const gtfsRoutes: Route[] = (rawTrips as RawTrip[])
+  .filter((t) => Array.isArray(t.stops) && t.stops.length >= 2)
+  .map((t) => ({
+    id: t.id,
+    routeId: t.routeId,
+    ref: t.ref,
+    name: t.name ?? `${t.from ?? '?'} → ${t.to ?? '?'}`,
+    headsign: t.headsign,
+    from: t.from,
+    to: t.to,
+    stops: t.stops,
+    source: 'gtfs' as const,
   }));
 
-/** All routes that pass through a given stop, e.g. to show "which trotros stop here". */
+const legacyRoutes: Route[] = (rawLegacyRoutes as RawLegacyRoute[])
+  .filter((r) => Array.isArray(r.stops) && r.stops.length >= 2)
+  .map((r) => ({
+    id: r.id,
+    routeId: r.routeId,
+    ref: r.ref,
+    name: r.name ?? `${r.from ?? '?'} ↔ ${r.to ?? '?'}`,
+    headsign: null,
+    from: r.from,
+    to: r.to,
+    stops: r.stops,
+    source: 'legacy' as const,
+  }));
+
+export const routes: Route[] = [...gtfsRoutes, ...legacyRoutes];
+
+/** All route-directions that pass through a given stop, e.g. to show "which trotros stop here". */
 export function routesForStop(stopId: string): Route[] {
   return routes.filter((r) => r.stops.some((s) => s.id === stopId));
 }

@@ -28,19 +28,50 @@ export const Colors = {
   },
 };
 
-// Named color palette matching the Figma color styles — use directly in StyleSheet.create,
-// e.g. Palette.CustomBlack
+// Uber-style design tokens (see DESIGN-uber.md): a black-and-white duet with greys.
+// There is deliberately no accent colour. Black is the only call-to-action colour.
 export const Palette = {
-  GrayBackground: '#E9E9E9',
   Black: '#000000',
-  CustomBlack: '#181818',
   White: '#FFFFFF',
-  Placeholder: '#BABABA',
-  DarkGray: '#5F5F5F',
-  LightGray: '#D2D2D2',
-  Green: '#39B221',
-  Red: '#D32B2B',
+  CustomBlack: '#000000', // kept so older screens keep compiling
+  Elevated: '#282828', // near-black, pressed/hover on black surfaces
+  Soft: '#EFEFEF', // chips, input rows, icon buttons
+  Softer: '#F3F3F3',
+  Pressed: '#E2E2E2',
+  GrayBackground: '#EFEFEF',
+  LightGray: '#E2E2E2', // hairlines and dividers
+  Placeholder: '#AFAFAF', // placeholder + fine print ("mute")
+  DarkGray: '#5E5E5E', // secondary text ("body")
+  Green: '#39B221', // only used for the live-GPS dot
+  Red: '#D32B2B', // only used for destructive actions
 };
+
+export const Radius = {
+  md: 8,
+  lg: 12,
+  xl: 16, // cards
+  sheet: 24, // bottom sheets
+  pill: 999, // every interactive element
+};
+
+export const Shadow = {
+  // Level 3: the white pill floating over a map
+  float: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.16,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  // Level 2: sheets and the ride-request card
+  card: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.16,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+} as const;
 
 export const Fonts = Platform.select({
   ios: {

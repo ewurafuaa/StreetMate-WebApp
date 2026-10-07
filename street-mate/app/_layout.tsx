@@ -1,90 +1,100 @@
 //app/_layout.tsx
-import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router/react-navigation';
-import { Poppins_400Regular, Poppins_500Medium, Poppins_600SemiBold, Poppins_700Bold, useFonts } from '@expo-google-fonts/poppins';
+import { DefaultTheme, ThemeProvider } from 'expo-router/react-navigation';
+import { useFonts } from 'expo-font';
 import { Image } from 'expo-image';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, View, type ViewProps } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { FONT_FILES } from '@/components/app-text';
 import { SavedPlacesProvider } from '@/contexts/saved-places';
+import { TripHistoryProvider } from '@/contexts/trip-history';
 import 'react-native-reanimated';
 
-
-import { useColorScheme } from '@/hooks/use-color-scheme';
+// Web only: browsers draw their own focus outline (the box) around text fields. The app's fields
+// already show focus through their container, so the outline is removed and only the cursor remains.
+if (Platform.OS === 'web' && typeof document !== 'undefined') {
+  const style = document.createElement('style');
+  style.textContent = 'input, textarea { outline: none !important; box-shadow: none !important; }';
+  document.head.appendChild(style);
+}
 
 export const unstable_settings = {
   anchor: '(tabs)',
 };
 
+const SPLASH_MS = 2500;
+
+// The UI is designed as a phone screen (bottom sheets, full-bleed maps). On a wide browser window
+// it is shown as a centred phone-width column instead of being stretched across the screen.
+function WebFrame({ children }: ViewProps) {
+  if (Platform.OS !== 'web') return <>{children}</>;
+  return (
+    <View style={styles.webOuter}>
+      <View style={styles.webInner}>{children}</View>
+    </View>
+  );
+}
+
+// The app is light-only: the Uber-style design is a black-and-white system, so the
+// navigation theme is pinned to the default (white) theme regardless of the phone's setting.
+const AppTheme = { ...DefaultTheme, colors: { ...DefaultTheme.colors, background: '#FFFFFF', card: '#FFFFFF', text: '#000000', border: '#E2E2E2', primary: '#000000' } };
+
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
   const [showSplash, setShowSplash] = useState(true);
-  const [fontsLoaded] = useFonts({
-    Poppins_400Regular,
-    Poppins_500Medium,
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-  });
+  const [fontsLoaded] = useFonts(FONT_FILES);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowSplash(false);
-    }, 4000);
-
+    const timer = setTimeout(() => setShowSplash(false), SPLASH_MS);
     return () => clearTimeout(timer);
   }, []);
 
   if (showSplash || !fontsLoaded) {
     return (
-      <GestureHandlerRootView style={styles.flexFill}>
-        <View style={styles.splashContainer}>
-          <Image
-            source={require('@/assets/images/streetmate-logo.gif')}
-            style={styles.splashImage}
-            contentFit="contain"
-          />
-        </View>
-      </GestureHandlerRootView>
+      <WebFrame>
+        <GestureHandlerRootView style={styles.flexFill}>
+          <View style={styles.splashContainer}>
+            <Image source={require('@/assets/images/streetmate-logo.gif')} style={styles.splashImage} contentFit="contain" />
+          </View>
+        </GestureHandlerRootView>
+      </WebFrame>
     );
   }
 
   return (
+    <WebFrame>
     <GestureHandlerRootView style={styles.flexFill}>
       <SavedPlacesProvider>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <Stack>
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-          <Stack.Screen name="search" options={{ headerShown: false, presentation: 'card' }} />
-          <Stack.Screen name="map" options={{ headerShown: false, presentation: 'card' }} />
-          <Stack.Screen name="journey" options={{ headerShown: false, presentation: 'card' }} />
-          <Stack.Screen name="recent-trips" options={{ headerShown: false, presentation: 'card' }} />
-          <Stack.Screen name="saved-places" options={{ headerShown: false, presentation: 'card' }} />
-          <Stack.Screen name="add-place" options={{ headerShown: false, presentation: 'card' }} />
-          <Stack.Screen name="set-location" options={{ headerShown: false, presentation: 'card' }} />
-          <Stack.Screen name="route-hub" options={{ headerShown: false, presentation: 'card' }} />
-          <Stack.Screen name="stops-map" options={{ headerShown: false, presentation: 'card' }} />
-        </Stack>
-        <StatusBar style="auto" />
-      </ThemeProvider>
+        <TripHistoryProvider>
+          <ThemeProvider value={AppTheme}>
+            <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: '#FFFFFF' } }}>
+              <Stack.Screen name="(tabs)" />
+              <Stack.Screen name="modal" options={{ presentation: 'modal', headerShown: true, title: 'Modal' }} />
+              <Stack.Screen name="search" options={{ animation: 'slide_from_bottom' }} />
+              <Stack.Screen name="map" />
+              <Stack.Screen name="journey" options={{ gestureEnabled: false }} />
+              <Stack.Screen name="recent-trips" />
+              <Stack.Screen name="saved-places" />
+              <Stack.Screen name="add-place" />
+              <Stack.Screen name="set-location" />
+              <Stack.Screen name="route-hub" />
+              <Stack.Screen name="stops-map" />
+              <Stack.Screen name="tips" />
+            </Stack>
+            <StatusBar style="dark" />
+          </ThemeProvider>
+        </TripHistoryProvider>
       </SavedPlacesProvider>
     </GestureHandlerRootView>
+    </WebFrame>
   );
 }
 
 const styles = StyleSheet.create({
-  flexFill: {
-    flex: 1,
-  },
-  splashContainer: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  splashImage: {
-    width: 300,
-    height: 300,
-  },
+  flexFill: { flex: 1 },
+  webOuter: { flex: 1, alignItems: 'center', backgroundColor: '#EDEDED' },
+  webInner: { flex: 1, width: '100%', maxWidth: 480, backgroundColor: '#FFFFFF', overflow: 'hidden' },
+  splashContainer: { flex: 1, backgroundColor: '#ffffff', justifyContent: 'center', alignItems: 'center' },
+  splashImage: { width: 300, height: 300 },
 });

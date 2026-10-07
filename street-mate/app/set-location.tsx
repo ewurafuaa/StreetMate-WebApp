@@ -1,438 +1,171 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
-import { Image } from 'expo-image';
-import {
-  Animated,
-  KeyboardAvoidingView,
-  PanResponder,
-  Platform,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
-import { BlurView } from 'expo-blur';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet, TextInput, View } from 'react-native';
+import MapView, { type Region } from 'react-native-maps';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText as Text } from '@/components/app-text';
-import { Palette } from '@/constants/theme';
+import { IconButton, PillButton } from '@/components/ui';
+import { STREETMATE_MAP_STYLE } from '@/constants/map-style';
+import { Palette, Radius, Shadow } from '@/constants/theme';
 import { useSavedPlaces } from '@/contexts/saved-places';
+import { CURRENT_LOCATION } from '@/data/stops';
+import { useCurrentLocation } from '@/hooks/use-current-location';
 import { cancelLocationRequest, deliverLocation, hasPendingLocationRequest } from '@/utils/location-picker';
+import { MAP_PROVIDER } from '@/utils/map-provider';
+import { reverseGeocode } from '@/utils/places';
 
-// Mock nearby locations — replace with real reverse-geocoding as the map center changes.
-const nearbyLocations = [
-  'Pentagon Hall Block C',
-  'Commonwealth Hall',
-  'Legon Boundary Road',
-  'Night Market Junction',
-  'Volta Hall',
-];
-
-const DRAG_DISTANCE_PER_LOCATION = 120; // px of cumulative drag before the location name updates
-
+// Pick a spot by dragging the map under a fixed pin. Used three ways:
+//   mode=pick      → hands the spot back to whichever screen asked (search, Route Hub)
+//   mode=location  → changes the location of an existing saved place (id=…)
+//   (no params)    → adds a new saved place, asking for a name after the spot is chosen
 export default function SetLocationScreen() {
+  const insets = useSafeAreaInsets();
   const { id, mode } = useLocalSearchParams<{ id?: string; mode?: string }>();
   const isEditingLocation = !!id && mode === 'location';
 
-  // Both conditions required. Expo Router can carry `mode=pick` over from a
-  // previous navigation, so the param alone would make the Saved Places flow
-  // look like a Route Hub pick and pop the user onto the wrong screen. A
-  // registered handler is what actually proves a screen is waiting for a value.
+  // A registered handler is what proves a screen is waiting for a value; the param alone can
+  // be carried over from an earlier navigation.
   const isPickingForField = mode === 'pick' && hasPendingLocationRequest();
 
-  const [locationIndex, setLocationIndex] = useState(0);
-  const [showNameStep, setShowNameStep] = useState(false);
-  const [placeName, setPlaceName] = useState('');
   const { addPlace, updatePlace } = useSavedPlaces();
-  const [sheetSlide] = useState(() => new Animated.Value(300));
-  const [nameOpacity] = useState(() => new Animated.Value(1));
-  const [nameStepSlide] = useState(() => new Animated.Value(300));
-  const [nameOverlayOpacity] = useState(() => new Animated.Value(0));
+  const { coords } = useCurrentLocation();
+  const mapRef = useRef<MapView>(null);
 
-  // Slide the location sheet up once, on mount.
+  const [center, setCenter] = useState<{ lat: number; lng: number }>({ lat: CURRENT_LOCATION.lat, lng: CURRENT_LOCATION.lng });
+  const [address, setAddress] = useState('');
+  const [resolving, setResolving] = useState(false);
+  const [naming, setNaming] = useState(false);
+  const [placeName, setPlaceName] = useState('');
+  const lookupId = useRef(0);
+  const centredOnUser = useRef(false);
+
+  // Any exit that isn't a confirm would otherwise leave the handler registered.
+  useEffect(() => () => cancelLocationRequest(), []);
+
+  // Move to the rider's real position once, the first time it arrives.
   useEffect(() => {
-    Animated.spring(sheetSlide, { toValue: 0, useNativeDriver: true, friction: 9, tension: 60 }).start();
-  }, [sheetSlide]);
+    if (!coords || centredOnUser.current) return;
+    centredOnUser.current = true;
+    mapRef.current?.animateToRegion({ latitude: coords.lat, longitude: coords.lng, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 400);
+  }, [coords]);
 
-  // Any exit that isn't a confirm — swipe-back, hardware back, navigating away —
-  // would otherwise leave the handler registered and poison the next visit.
-  useEffect(() => {
-    return () => cancelLocationRequest();
-  }, []);
-
-  const updateLocationName = (nextIndex: number) => {
-    if (nextIndex === locationIndex) return;
-    Animated.sequence([
-      Animated.timing(nameOpacity, { toValue: 0, duration: 120, useNativeDriver: true }),
-      Animated.timing(nameOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
-    ]).start();
-    setLocationIndex(nextIndex);
+  const onRegionChangeComplete = async (r: Region) => {
+    const point = { lat: r.latitude, lng: r.longitude };
+    setCenter(point);
+    const mine = ++lookupId.current;
+    setResolving(true);
+    const name = await reverseGeocode(point.lat, point.lng);
+    if (mine !== lookupId.current) return; // a newer drag superseded this lookup
+    setAddress(name);
+    setResolving(false);
   };
 
-  const [panResponder] = useState(() =>
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, gestureState) =>
-        Math.abs(gestureState.dx) > 5 || Math.abs(gestureState.dy) > 5,
-      onPanResponderMove: (_, gestureState) => {
-        const totalDrag = Math.abs(gestureState.dx) + Math.abs(gestureState.dy);
-        const steps = Math.floor(totalDrag / DRAG_DISTANCE_PER_LOCATION);
-        const nextIndex = steps % nearbyLocations.length;
-        updateLocationName(nextIndex);
-      },
-    })
-  );
-
-  const handleBack = () => {
-    if (showNameStep) {
-      handleBackToLocation();
-      return;
-    }
-    router.back();
-  };
-
-  const handleConfirmLocation = () => {
-    // Picking a location on behalf of another screen (e.g. Route Hub): hand the
-    // value back and pop, so that screen's other fields stay as the user left them.
+  const confirm = () => {
+    const name = address || `${center.lat.toFixed(4)}, ${center.lng.toFixed(4)}`;
     if (isPickingForField) {
-      deliverLocation(nearbyLocations[locationIndex]);
+      deliverLocation(name, center);
       router.back();
       return;
     }
-
-    // Editing an existing place's location: just update it and go
-    // straight back to Saved Places — no name step needed.
     if (isEditingLocation && id) {
-      updatePlace(id, { address: nearbyLocations[locationIndex] });
+      updatePlace(id, { address: name, lat: center.lat, lng: center.lng });
       router.replace('/saved-places');
       return;
     }
-
-    setShowNameStep(true);
-    Animated.parallel([
-      Animated.spring(nameStepSlide, { toValue: 0, useNativeDriver: true, friction: 9, tension: 60 }),
-      Animated.timing(nameOverlayOpacity, { toValue: 1, duration: 250, useNativeDriver: true }),
-    ]).start();
+    setNaming(true);
   };
 
-  const handleBackToLocation = () => {
-    Animated.parallel([
-      Animated.timing(nameStepSlide, { toValue: 300, duration: 200, useNativeDriver: true }),
-      Animated.timing(nameOverlayOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-    ]).start(() => setShowNameStep(false));
-  };
-
-  const [nameSheetPanResponder] = useState(() =>
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_, gestureState) => gestureState.dy > 8 && Math.abs(gestureState.dx) < 20,
-      onPanResponderMove: (_, gestureState) => {
-        if (gestureState.dy > 0) {
-          nameStepSlide.setValue(gestureState.dy);
-        }
-      },
-      onPanResponderRelease: (_, gestureState) => {
-        if (gestureState.dy > 60) {
-          handleBackToLocation();
-        } else {
-          Animated.spring(nameStepSlide, {
-            toValue: 0,
-            useNativeDriver: true,
-            friction: 8,
-            tension: 60,
-          }).start();
-        }
-      },
-    })
-  );
-
-  const handleSave = () => {
+  const save = () => {
     if (!placeName.trim()) return;
-    addPlace(placeName.trim(), nearbyLocations[locationIndex]);
+    addPlace(placeName.trim(), address, center);
     router.replace('/saved-places');
   };
 
-  const canSave = placeName.trim().length > 0;
-
   return (
     <View style={styles.container}>
-      {/* Placeholder map background — swap for react-native-maps once wired up */}
-      <View style={styles.mapPlaceholder} {...panResponder.panHandlers} />
+      <MapView
+        ref={mapRef}
+        provider={MAP_PROVIDER}
+        customMapStyle={STREETMATE_MAP_STYLE}
+        style={StyleSheet.absoluteFill}
+        initialRegion={{ latitude: CURRENT_LOCATION.lat, longitude: CURRENT_LOCATION.lng, latitudeDelta: 0.02, longitudeDelta: 0.02 }}
+        onRegionChangeComplete={onRegionChangeComplete}
+        showsUserLocation
+        showsMyLocationButton={false}
+        showsCompass={false}
+        toolbarEnabled={false}
+      />
 
-      {/* Fixed center pin — the map moves underneath it, not the pin itself */}
-      <View style={styles.centerPinWrap} pointerEvents="none">
-        <View style={styles.centerPinOuter}>
-          <View style={styles.centerPinInner} />
+      {/* Fixed pin: the map moves underneath it */}
+      <View style={styles.pinWrap} pointerEvents="none">
+        <View style={styles.pinHead}>
+          <View style={styles.pinCore} />
         </View>
+        <View style={styles.pinStem} />
       </View>
 
-      <SafeAreaView style={styles.topSafeArea} edges={['top']}>
-        <TouchableOpacity style={styles.backButton} onPress={handleBack}>
-          <Image
-            source={require('@/assets/images/icons/chevron-left.png')}
-            style={styles.backIcon}
-            contentFit="contain"
+      <View style={[styles.top, { top: insets.top + 8 }]}>
+        <IconButton name="arrow-back" floating onPress={() => (naming ? setNaming(false) : router.back())} accessibilityLabel="Back" />
+        {coords && (
+          <IconButton
+            name="locate"
+            floating
+            onPress={() =>
+              mapRef.current?.animateToRegion({ latitude: coords.lat, longitude: coords.lng, latitudeDelta: 0.008, longitudeDelta: 0.008 }, 400)
+            }
+            accessibilityLabel="Go to my location"
           />
-        </TouchableOpacity>
-      </SafeAreaView>
+        )}
+      </View>
 
-      {/* Step 1: pick a location */}
-      <Animated.View style={[styles.bottomSheet, { transform: [{ translateY: sheetSlide }] }]}>
-        <View style={styles.dragHandle} />
-
-        <View style={styles.sheetTopRow}>
-          <Animated.Text
-            numberOfLines={1}
-            ellipsizeMode="tail"
-            style={[styles.locationName, { opacity: nameOpacity }]}>
-            {nearbyLocations[locationIndex]}
-          </Animated.Text>
-          <TouchableOpacity style={styles.searchButton}>
-            <Image
-              source={require('@/assets/images/icons/search.png')}
-              style={styles.searchIcon}
-              contentFit="contain"
-            />
-          </TouchableOpacity>
-        </View>
-
-        <Text style={styles.sheetSubtitle}>Drag the map to select a location</Text>
-
-        <TouchableOpacity style={styles.confirmButton} onPress={handleConfirmLocation}>
-          <Text style={styles.confirmButtonText}>Confirm location</Text>
-        </TouchableOpacity>
-      </Animated.View>
-
-      {/* Step 2: name the place — slides up over step 1, keyboard-aware */}
-      {showNameStep && (
-        <>
-        <Animated.View style={[styles.nameOverlayBlur, { opacity: nameOverlayOpacity }]}>
-            <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill} />
-            <View style={styles.nameOverlayTint} pointerEvents="none" />
-            <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={handleBackToLocation} />
-        </Animated.View>
-
-          <KeyboardAvoidingView
-            style={styles.nameSheetOverlay}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            pointerEvents="box-none">
-            <Animated.View style={[styles.nameSheet, { transform: [{ translateY: nameStepSlide }] }]}>
-            <View style={styles.dragHandle} {...nameSheetPanResponder.panHandlers} hitSlop={{ top: 15, bottom: 15, left: 40, right: 40 }} />
-
-            <TouchableOpacity style={styles.nameSheetHeaderRow} onPress={handleBackToLocation}>
-              <Image
-                source={require('@/assets/images/icons/chevron-left.png')}
-                style={styles.nameBackIcon}
-                contentFit="contain"
+      <KeyboardAvoidingView style={styles.sheetWrap} behavior={Platform.OS === 'ios' ? 'padding' : undefined} pointerEvents="box-none">
+        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) + 8 }]}>
+          <View style={styles.handle} />
+          {naming ? (
+            <>
+              <Text weight="bold" style={styles.title}>Name this place</Text>
+              <TextInput
+                autoFocus
+                value={placeName}
+                onChangeText={setPlaceName}
+                placeholder="e.g. School"
+                placeholderTextColor={Palette.Placeholder}
+                style={styles.input}
+                returnKeyType="done"
+                onSubmitEditing={save}
               />
-              <Text weight="medium" style={styles.nameSheetTitle}>Add a Name</Text>
-            </TouchableOpacity>
-
-            <Text style={styles.nameSheetLabel}>Name this new place</Text>
-
-            <TextInput
-              autoFocus
-              value={placeName}
-              onChangeText={setPlaceName}
-              placeholder="e.g. School"
-              placeholderTextColor={Palette.Placeholder}
-              style={styles.nameInput}
-            />
-
-            <TouchableOpacity
-              style={[styles.saveButton, !canSave && styles.saveButtonDisabled]}
-              disabled={!canSave}
-              onPress={handleSave}>
-              <Text weight="medium" style={styles.saveButtonText}>Save</Text>
-            </TouchableOpacity>
-          </Animated.View>
-        </KeyboardAvoidingView>
-        </>
-      )}
+              <PillButton label="Save place" onPress={save} disabled={!placeName.trim()} />
+            </>
+          ) : (
+            <>
+              <Text weight="bold" style={styles.title} numberOfLines={2}>
+                {address || 'Move the map to pick a spot'}
+              </Text>
+              <View style={styles.hintRow}>
+                {resolving && <ActivityIndicator size="small" color={Palette.DarkGray} />}
+                <Text style={styles.hint}>{resolving ? 'Finding the address…' : 'Drag the map to put the pin on the spot.'}</Text>
+              </View>
+              <PillButton label="Confirm location" onPress={confirm} disabled={resolving && !address} style={{ marginTop: 16 }} />
+            </>
+          )}
+        </View>
+      </KeyboardAvoidingView>
     </View>
   );
 }
 
-// Local replacement for StyleSheet.absoluteFillObject, which is missing from the
-// current type definitions. Same four properties, spread into styles below.
-const fillParent = {
-  position: 'absolute' as const,
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-};
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Palette.GrayBackground,
-  },
-  mapPlaceholder: {
-    ...fillParent,
-    backgroundColor: Palette.GrayBackground,
-  },
-  centerPinWrap: {
-    ...fillParent,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  nameOverlayBlur: {
-    ...fillParent,
-  },
-  nameOverlayTint: {
-    ...fillParent,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-  },
-  centerPinOuter: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Palette.LightGray,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  centerPinInner: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: Palette.CustomBlack,
-  },
-  topSafeArea: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-  },
-  backButton: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: Palette.White,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 20,
-    marginTop: 20,
-    shadowColor: Palette.Black,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 8,
-  },
-  backIcon: {
-    width: 30,
-    height: 30,
-  },
-  bottomSheet: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: Palette.White,
-    borderRadius: 20,
-    paddingTop: 10,
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-    margin: 20,
-  },
-  dragHandle: {
-    alignSelf: 'center',
-    width: 40,
-    height: 5,
-    borderRadius: 5,
-    backgroundColor: Palette.LightGray,
-    marginBottom: 20,
-  },
-  sheetTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 5,
-  },
-  locationName: {
-    flex: 1,
-    fontSize: 24,
-    color: Palette.CustomBlack,
-    fontFamily: 'Poppins_500Medium',
-    marginRight: 20,
-  },
-  searchButton: {
-    width: 40,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  searchIcon: {
-    width: 24,
-    height: 24,
-  },
-  sheetSubtitle: {
-    fontSize: 14,
-    color: Palette.DarkGray,
-    marginBottom: 20,
-  },
-  confirmButton: {
-    backgroundColor: Palette.CustomBlack,
-    borderRadius: 10,
-    paddingVertical: 20,
-    alignItems: 'center',
-  },
-  confirmButtonText: {
-    color: Palette.White,
-    fontSize: 16,
-  },
-  nameSheetOverlay: {
-    ...fillParent,
-    justifyContent: 'flex-end',
-  },
-  nameSheet: {
-    backgroundColor: Palette.White,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingTop: 10,
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-  },
-  nameSheetHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 16,
-  },
-  nameBackIcon: {
-    width: 30,
-    height: 30,
-  },
-  nameSheetTitle: {
-    fontSize: 18,
-    color: Palette.CustomBlack,
-  },
-  nameSheetLabel: {
-    fontSize: 16,
-    color: Palette.CustomBlack,
-    marginBottom: 10,
-  },
-  nameInput: {
-    borderWidth: 1,
-    borderColor: Palette.CustomBlack,
-    borderRadius: 10,
-    paddingVertical: 15,
-    paddingHorizontal: 16,
-    fontSize: 16,
-    color: Palette.CustomBlack,
-    fontFamily: 'Poppins_400Regular',
-    marginBottom: 20,
-  },
-  saveButton: {
-    backgroundColor: Palette.CustomBlack,
-    borderRadius: 10,
-    paddingVertical: 20,
-    alignItems: 'center',
-  },
-  saveButtonDisabled: {
-    backgroundColor: Palette.LightGray,
-  },
-  saveButtonText: {
-    color: Palette.White,
-    fontSize: 16,
-  },
+  container: { flex: 1, backgroundColor: Palette.Soft },
+  top: { position: 'absolute', left: 16, right: 16, flexDirection: 'row', justifyContent: 'space-between' },
+  pinWrap: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', paddingBottom: 54 },
+  pinHead: { width: 32, height: 32, borderRadius: 16, backgroundColor: Palette.Black, alignItems: 'center', justifyContent: 'center', ...Shadow.float },
+  pinCore: { width: 10, height: 10, backgroundColor: Palette.White },
+  pinStem: { width: 3, height: 22, backgroundColor: Palette.Black },
+  sheetWrap: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+  sheet: { backgroundColor: Palette.White, borderTopLeftRadius: Radius.sheet, borderTopRightRadius: Radius.sheet, paddingHorizontal: 20, paddingTop: 10, ...Shadow.card },
+  handle: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: Palette.LightGray, marginBottom: 14 },
+  title: { fontSize: 22, lineHeight: 28, color: Palette.Black },
+  hintRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
+  hint: { fontSize: 14, color: Palette.DarkGray },
+  input: { height: 52, borderRadius: Radius.md, backgroundColor: Palette.Soft, paddingHorizontal: 16, fontSize: 16, color: Palette.Black, fontFamily: 'HelveticaNow_Medium', marginVertical: 14 },
 });

@@ -22,7 +22,7 @@ export function useCurrentLocation() {
           return;
         }
 
-        const last = await Location.getLastKnownPositionAsync();
+        const last = await Location.getLastKnownPositionAsync().catch(() => null);
         if (cancelled) return;
         if (last) {
           setCoords({ lat: last.coords.latitude, lng: last.coords.longitude });

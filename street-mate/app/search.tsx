@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { router } from 'expo-router';
-import { Image } from 'expo-image';
+import { router, useLocalSearchParams } from 'expo-router';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -13,7 +12,10 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppText as Text } from '@/components/app-text';
-import { Palette } from '@/constants/theme';
+import { IconBadge, IconButton } from '@/components/ui';
+import { Palette, Radius } from '@/constants/theme';
+import { useSavedPlaces } from '@/contexts/saved-places';
+import { requestLocation } from '@/utils/location-picker';
 import { CURRENT_LOCATION, formatDistance } from '@/data/stops';
 import { useCurrentLocation } from '@/hooks/use-current-location';
 import {
@@ -57,6 +59,8 @@ const FALLBACK_POINT: Point = { lat: CURRENT_LOCATION.lat, lng: CURRENT_LOCATION
 
 export default function SearchScreen() {
   const { coords, status } = useCurrentLocation();
+  const { q } = useLocalSearchParams<{ q?: string }>();
+  const { places: savedPlaces } = useSavedPlaces();
 
   // Origin field
   const [originMode, setOriginMode] = useState<'current' | 'custom'>('current');
@@ -67,7 +71,7 @@ export default function SearchScreen() {
   const [resolvingAddress, setResolvingAddress] = useState(false);
 
   // Destination field
-  const [destQuery, setDestQuery] = useState('');
+  const [destQuery, setDestQuery] = useState(q ?? '');
 
   // Shared search state: only one field is active at a time
   const [activeField, setActiveField] = useState<Field>('destination');
@@ -84,6 +88,12 @@ export default function SearchScreen() {
   const sessionTokenRef = useRef<string | null>(null);
   const addressKeyRef = useRef<string | null>(null); // which GPS spot currentAddress belongs to
   const skipFocusSearchRef = useRef(false); // set when we move focus to the destination ourselves
+
+  // A place tapped on the home screen arrives as ?q=… and is searched immediately.
+  useEffect(() => {
+    if (q && q.trim().length >= MIN_QUERY_LENGTH) startSearch(q, FALLBACK_POINT, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Stops a pending search from firing after the screen is closed.
   useEffect(() => {
@@ -231,6 +241,34 @@ export default function SearchScreen() {
     startSearch(text, originPoint);
   };
 
+  const openPlanner = (name: string, point: Point) =>
+    router.push({
+      pathname: '/map',
+      params: {
+        origin: originLabel,
+        destination: name,
+        destLat: String(point.lat),
+        destLng: String(point.lng),
+        originLat: String(originPoint.lat),
+        originLng: String(originPoint.lng),
+      },
+    });
+
+  // "Choose on map": the map screen hands back a name + coordinates.
+  const handleChooseOnMap = () => {
+    const field = activeField;
+    requestLocation((name, point) => {
+      if (!point) return;
+      if (field === 'origin') {
+        setCustomOrigin({ name, ...point });
+        setOriginMode('custom');
+      } else {
+        openPlanner(name, point);
+      }
+    });
+    router.push({ pathname: '/set-location', params: { mode: 'pick' } });
+  };
+
   // --- Picking a result -----------------------------------------------------
 
   // A suggestion has no coordinates yet, so one more call fetches them first.
@@ -254,17 +292,7 @@ export default function SearchScreen() {
         destInputRef.current?.focus();
         if (destQuery.trim().length >= MIN_QUERY_LENGTH) startSearch(destQuery, picked, 0);
       } else {
-        router.push({
-          pathname: '/map',
-          params: {
-            origin: originLabel,
-            destination: item.name,
-            destLat: String(place.lat),
-            destLng: String(place.lng),
-            originLat: String(originPoint.lat),
-            originLng: String(originPoint.lng),
-          },
-        });
+        openPlanner(item.name, place);
       }
     } catch (e) {
       setError(e instanceof PlacesError ? e.message : "Couldn't open that place. Please try again.");
@@ -273,159 +301,126 @@ export default function SearchScreen() {
     }
   };
 
+  const showIdle = suggestions.length === 0 && !searching && !error && !hasSearched;
+  const savedWithPoint = savedPlaces.filter((p) => p.address.trim() && p.lat != null && p.lng != null);
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <KeyboardAvoidingView
-        style={styles.keyboardAvoider}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={0}>
-        {/* Header */}
+      <KeyboardAvoidingView style={styles.keyboardAvoider} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()}>
-            <Image
-              source={require('@/assets/images/icons/chevron-left.png')}
-              style={styles.backIcon}
-              contentFit="contain"
-            />
-          </TouchableOpacity>
-          <Text weight="medium" style={styles.headerTitle}>Your Route</Text>
-          <View style={styles.headerSpacer} />
+          <IconButton name="arrow-back" onPress={() => router.back()} accessibilityLabel="Back" />
+          <Text weight="bold" style={styles.headerTitle}>Plan your trip</Text>
         </View>
 
-        {/* Starting point: shows "Current location", the real address once tapped, or a chosen place */}
-        <View style={[styles.currentLocationPill, originFocused && styles.pillFocused]}>
-          <Image
-            source={require('@/assets/images/icons/map-pin.png')}
-            style={styles.pillIcon}
-            contentFit="contain"
-          />
-          <TextInput
-            ref={originInputRef}
-            value={originFocused ? originQuery : originDisplay}
-            onChangeText={handleOriginChange}
-            onFocus={handleOriginFocus}
-            onBlur={handleOriginBlur}
-            selectTextOnFocus
-            returnKeyType="search"
-            placeholder={resolvingAddress ? 'Finding your address…' : 'Search a starting point'}
-            placeholderTextColor={Palette.Placeholder}
-            style={styles.currentLocationText}
-          />
-          {originFocused && resolvingAddress && (
-            <ActivityIndicator size="small" color={Palette.DarkGray} />
-          )}
+        {/* Stacked from / to card, with the dot-line-square rail */}
+        <View style={styles.card}>
+          <View style={styles.rail}>
+            <View style={styles.railDot} />
+            <View style={styles.railLine} />
+            <View style={styles.railSquare} />
+          </View>
+          <View style={styles.fields}>
+            <View style={[styles.field, originFocused && styles.fieldFocused]}>
+              <TextInput
+                ref={originInputRef}
+                value={originFocused ? originQuery : originDisplay}
+                onChangeText={handleOriginChange}
+                onFocus={handleOriginFocus}
+                onBlur={handleOriginBlur}
+                selectTextOnFocus
+                returnKeyType="search"
+                placeholder={resolvingAddress ? 'Finding your address…' : 'Search a starting point'}
+                placeholderTextColor={Palette.Placeholder}
+                style={styles.input}
+              />
+              {originFocused && resolvingAddress && <ActivityIndicator size="small" color={Palette.DarkGray} />}
+            </View>
+            <View style={[styles.field, !originFocused && styles.fieldFocused]}>
+              <TextInput
+                ref={destInputRef}
+                autoFocus
+                value={destQuery}
+                onChangeText={handleDestChange}
+                onFocus={handleDestFocus}
+                placeholder="Where to?"
+                placeholderTextColor={Palette.Placeholder}
+                style={styles.input}
+              />
+              {searching && activeField === 'destination' && <ActivityIndicator size="small" color={Palette.DarkGray} />}
+            </View>
+          </View>
         </View>
 
-        {/* Destination input */}
-        <View style={[styles.searchInputWrap, originFocused && styles.searchInputWrapInactive]}>
-          <Image
-            source={require('@/assets/images/icons/search.png')}
-            style={styles.searchIcon}
-            contentFit="contain"
-          />
-          <TextInput
-            ref={destInputRef}
-            autoFocus
-            value={destQuery}
-            onChangeText={handleDestChange}
-            onFocus={handleDestFocus}
-            placeholder="Search a destination"
-            placeholderTextColor={Palette.Placeholder}
-            style={styles.searchInput}
-          />
-          {searching && activeField === 'destination' && (
-            <ActivityIndicator size="small" color={Palette.DarkGray} />
-          )}
-        </View>
-
-        {/* Scrollable content: results + the static options below them */}
-        <ScrollView
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scrollContent}>
-          {/* Lets the rider return to GPS after choosing a different starting point */}
+        <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
           {activeField === 'origin' && originFocused && originMode === 'custom' && (
+            <TouchableOpacity style={styles.row} onPress={handleUseCurrentLocation} activeOpacity={0.6}>
+              <IconBadge name="navigate" />
+              <Text weight="medium" style={styles.rowText}>Use current location</Text>
+            </TouchableOpacity>
+          )}
+
+          {suggestions.map((item) => (
+            <TouchableOpacity
+              key={item.placeId}
+              style={styles.row}
+              activeOpacity={0.6}
+              disabled={resolvingId !== null}
+              onPress={() => handleSelect(item)}>
+              <IconBadge name="location" />
+              <View style={styles.resultTextGroup}>
+                <HighlightedName name={item.name} query={activeQuery} />
+                {item.secondary ? <Text numberOfLines={1} style={styles.resultAddress}>{item.secondary}</Text> : null}
+              </View>
+              {resolvingId === item.placeId ? (
+                <ActivityIndicator size="small" color={Palette.DarkGray} />
+              ) : item.distanceMeters != null ? (
+                <Text style={styles.resultDistance}>{formatDistance(item.distanceMeters / 1000)}</Text>
+              ) : null}
+            </TouchableOpacity>
+          ))}
+
+          {error && (
+            <View style={styles.empty}>
+              <Text weight="medium" style={styles.emptyTitle}>{error}</Text>
+            </View>
+          )}
+
+          {hasSearched && !searching && !error && suggestions.length === 0 && (
+            <View style={styles.empty}>
+              <Text weight="medium" style={styles.emptyTitle}>No places match that search</Text>
+              <Text style={styles.emptyHint}>Try a nearby landmark, junction or area name.</Text>
+            </View>
+          )}
+
+          {suggestions.length > 0 && <Text style={styles.attribution}>Powered by Google</Text>}
+
+          {/* Shortcuts, shown until the rider starts typing */}
+          {(showIdle || activeField === 'origin') && suggestions.length === 0 && (
             <>
-              <TouchableOpacity style={styles.row} onPress={handleUseCurrentLocation}>
-                <Image
-                  source={require('@/assets/images/icons/map-pin.png')}
-                  style={styles.rowIcon}
-                  contentFit="contain"
-                />
-                <Text style={styles.rowText}>Use current location</Text>
+              {activeField === 'destination' &&
+                savedWithPoint.map((p) => (
+                  <TouchableOpacity
+                    key={p.id}
+                    style={styles.row}
+                    activeOpacity={0.6}
+                    onPress={() => openPlanner(p.label, { lat: p.lat as number, lng: p.lng as number })}>
+                    <IconBadge name={p.icon === 'home' ? 'home' : p.icon === 'work' ? 'briefcase' : 'star'} />
+                    <View style={styles.resultTextGroup}>
+                      <Text weight="medium" style={styles.resultName}>{p.label}</Text>
+                      <Text numberOfLines={1} style={styles.resultAddress}>{p.address}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              <TouchableOpacity style={styles.row} onPress={handleChooseOnMap} activeOpacity={0.6}>
+                <IconBadge name="map" />
+                <Text weight="medium" style={styles.rowText}>Choose on map</Text>
               </TouchableOpacity>
-              <View style={styles.divider} />
+              <TouchableOpacity style={styles.row} onPress={() => router.push('/saved-places')} activeOpacity={0.6}>
+                <IconBadge name="bookmark" />
+                <Text weight="medium" style={styles.rowText}>Saved places</Text>
+              </TouchableOpacity>
             </>
           )}
-
-          <View style={styles.resultsList}>
-            {suggestions.map((item) => (
-              <TouchableOpacity
-                key={item.placeId}
-                style={styles.resultRow}
-                disabled={resolvingId !== null}
-                onPress={() => handleSelect(item)}>
-                <View style={styles.resultIconGroup}>
-                  <Image
-                    source={require('@/assets/images/icons/location-result.png')}
-                    style={styles.resultPinIcon}
-                    contentFit="contain"
-                  />
-                  {item.distanceMeters != null && (
-                    <Text style={styles.resultDistance}>{formatDistance(item.distanceMeters / 1000)}</Text>
-                  )}
-                </View>
-                <View style={styles.resultTextGroup}>
-                  <HighlightedName name={item.name} query={activeQuery} />
-                  {item.secondary ? (
-                    <Text numberOfLines={1} style={styles.resultAddress}>{item.secondary}</Text>
-                  ) : null}
-                </View>
-                {resolvingId === item.placeId && (
-                  <ActivityIndicator size="small" color={Palette.DarkGray} />
-                )}
-              </TouchableOpacity>
-            ))}
-
-            {error && (
-              <View style={styles.emptyResults}>
-                <Text style={styles.emptyResultsText}>{error}</Text>
-              </View>
-            )}
-
-            {hasSearched && !searching && !error && suggestions.length === 0 && (
-              <View style={styles.emptyResults}>
-                <Text style={styles.emptyResultsText}>No places match that search.</Text>
-                <Text style={styles.emptyResultsHint}>
-                  Try a nearby landmark, junction or area name instead.
-                </Text>
-              </View>
-            )}
-
-            {suggestions.length > 0 && <Text style={styles.attribution}>Powered by Google</Text>}
-          </View>
-
-          {/* Set location on map */}
-          <TouchableOpacity style={styles.row} onPress={() => router.push('/stops-map')}>
-            <Image
-              source={require('@/assets/images/icons/map-pinned.png')}
-              style={styles.rowIcon}
-              contentFit="contain"
-            />
-            <Text style={styles.rowText}>Set location on map</Text>
-          </TouchableOpacity>
-
-          <View style={styles.divider} />
-
-          {/* Saved places */}
-          <TouchableOpacity style={styles.row} onPress={() => router.push('/saved-places')}>
-            <Image
-              source={require('@/assets/images/icons/map-pin-house.png')}
-              style={styles.rowIcon}
-              contentFit="contain"
-            />
-            <Text style={styles.rowText}>Saved places</Text>
-          </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -433,165 +428,30 @@ export default function SearchScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Palette.White,
-    paddingHorizontal: 20,
-  },
-  keyboardAvoider: {
-    flex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 20,
-  },
-  backIcon: {
-    width: 30,
-    height: 30,
-  },
-  headerTitle: {
-    fontSize: 18,
-    color: Palette.CustomBlack,
-  },
-  headerSpacer: {
-    width: 24,
-  },
-  currentLocationPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: Palette.White,
-    borderRadius: 10,
-    paddingVertical: 15,
-    paddingHorizontal: 20,
-    borderWidth: 1,
-    borderColor: 'transparent',
-    shadowColor: Palette.Black,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 8,
-  },
-  pillFocused: {
-    borderColor: Palette.CustomBlack,
-  },
-  searchInputWrapInactive: {
-    borderColor: 'transparent',
-  },
-  pillIcon: {
-    width: 20,
-    height: 20,
-  },
-  currentLocationText: {
-    flex: 1,
-    padding: 0,
-    fontSize: 16,
-    color: Palette.CustomBlack,
-    fontFamily: 'Poppins_400Regular',
-  },
-  searchInputWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: Palette.White,
-    borderRadius: 10,
-    paddingVertical: 15,
-    paddingHorizontal: 20,
-    marginTop: 10,
-    shadowColor: Palette.CustomBlack,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 8,
-    borderWidth: 1,
-    borderColor: Palette.CustomBlack,
-  },
-  searchIcon: {
-    width: 20,
-    height: 20,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 16,
-    color: Palette.CustomBlack,
-    fontFamily: 'Poppins_400Regular',
-  },
-  scrollContent: {
-    paddingBottom: 40,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 20,
-  },
-  rowIcon: {
-    width: 20,
-    height: 20,
-  },
-  rowText: {
-    fontSize: 16,
-    color: Palette.CustomBlack,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: Palette.LightGray,
-  },
-  resultsList: {
-    marginTop: 0,
-  },
-  resultRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: Palette.LightGray,
-  },
-  resultIconGroup: {
-    alignItems: 'center',
-    width: 50,
-  },
-  resultPinIcon: {
-    width: 20,
-    height: 20,
-  },
-  resultDistance: {
-    fontSize: 12,
-    color: Palette.DarkGray,
-    marginTop: 5,
-  },
-  resultTextGroup: {
-    flex: 1,
-  },
-  resultName: {
-    fontSize: 16,
-    color: Palette.CustomBlack,
-    lineHeight: 22,
-  },
-  resultAddress: {
-    fontSize: 14,
-    color: Palette.DarkGray,
-  },
-  emptyResults: {
-    paddingVertical: 20,
-  },
-  emptyResultsText: {
-    fontSize: 16,
-    color: Palette.CustomBlack,
-    marginBottom: 5,
-  },
-  emptyResultsHint: {
-    fontSize: 14,
-    color: Palette.DarkGray,
-  },
-  attribution: {
-    fontSize: 12,
-    color: Palette.DarkGray,
-    textAlign: 'right',
-    paddingTop: 10,
-    paddingBottom: 5,
-  },
+  container: { flex: 1, backgroundColor: Palette.White },
+  keyboardAvoider: { flex: 1 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 12 },
+  headerTitle: { fontSize: 24, lineHeight: 32, color: Palette.Black },
+
+  card: { flexDirection: 'row', gap: 12, marginHorizontal: 16, padding: 12, borderRadius: Radius.xl, backgroundColor: Palette.White, borderWidth: 1, borderColor: Palette.LightGray },
+  rail: { width: 14, alignItems: 'center', paddingVertical: 22 },
+  railDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: Palette.Black },
+  railLine: { width: 2, flex: 1, backgroundColor: Palette.LightGray, marginVertical: 4 },
+  railSquare: { width: 10, height: 10, backgroundColor: Palette.Black },
+  fields: { flex: 1, gap: 8 },
+  field: { flexDirection: 'row', alignItems: 'center', gap: 8, height: 48, borderRadius: Radius.md, paddingHorizontal: 14, backgroundColor: Palette.Soft, borderWidth: 2, borderColor: 'transparent' },
+  fieldFocused: { borderColor: Palette.Black, backgroundColor: Palette.White },
+  input: { flex: 1, padding: 0, fontSize: 16, color: Palette.Black, fontFamily: 'HelveticaNow_Medium' },
+
+  scrollContent: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 40 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: Palette.Soft },
+  rowText: { flex: 1, fontSize: 16, color: Palette.Black },
+  resultTextGroup: { flex: 1 },
+  resultName: { fontSize: 16, lineHeight: 22, color: Palette.Black },
+  resultAddress: { fontSize: 14, lineHeight: 20, color: Palette.DarkGray },
+  resultDistance: { fontSize: 13, color: Palette.DarkGray },
+  empty: { paddingVertical: 24 },
+  emptyTitle: { fontSize: 16, color: Palette.Black, marginBottom: 4 },
+  emptyHint: { fontSize: 14, color: Palette.DarkGray },
+  attribution: { fontSize: 12, color: Palette.Placeholder, textAlign: 'right', paddingTop: 10 },
 });

@@ -5,19 +5,22 @@ export type SavedPlace = {
   label: string;
   address: string;
   icon: 'home' | 'work' | 'star';
+  /** Present when the place was picked on the map, so it can be used as a destination. */
+  lat?: number;
+  lng?: number;
 };
 
 type SavedPlacesContextValue = {
   places: SavedPlace[];
-  addPlace: (label: string, address: string) => void;
+  addPlace: (label: string, address: string, point?: { lat: number; lng: number }) => void;
   removePlace: (id: string) => void;
   updatePlace: (id: string, patch: Partial<Omit<SavedPlace, 'id'>>) => void;
 };
 
 const SavedPlacesContext = createContext<SavedPlacesContextValue | undefined>(undefined);
 
-// Starting mock data — Home and Work exist as slots with no address yet,
-// so the UI prompts "Add Home" / "Add Work" until the user sets one.
+// Home and Work exist as slots with no address yet, so the UI prompts
+// "Add Home" / "Add Work" until the user sets one.
 const initialPlaces: SavedPlace[] = [
   { id: '1', label: 'Home', address: '', icon: 'home' },
   { id: '2', label: 'Work', address: '', icon: 'work' },
@@ -26,8 +29,8 @@ const initialPlaces: SavedPlace[] = [
 export function SavedPlacesProvider({ children }: { children: ReactNode }) {
   const [places, setPlaces] = useState<SavedPlace[]>(initialPlaces);
 
-  const addPlace = (label: string, address: string) => {
-    setPlaces((prev) => [...prev, { id: Date.now().toString(), label, address, icon: 'star' }]);
+  const addPlace = (label: string, address: string, point?: { lat: number; lng: number }) => {
+    setPlaces((prev) => [...prev, { id: Date.now().toString(), label, address, icon: 'star', lat: point?.lat, lng: point?.lng }]);
   };
 
   const removePlace = (id: string) => {

@@ -27,7 +27,7 @@ module.exports = {
       predictiveBackGestureEnabled: false,
     },
     web: {
-      output: 'static',
+      output: 'single',
       favicon: './assets/images/favicon.png',
     },
     plugins: [
@@ -66,6 +66,11 @@ module.exports = {
     experiments: {
       typedRoutes: true,
       reactCompiler: true,
+    },
+    extra: {
+      eas: {
+        projectId: '81fd0c7f-2b0f-402f-860c-c3b2fba17489',
+      },
     },
   },
 };

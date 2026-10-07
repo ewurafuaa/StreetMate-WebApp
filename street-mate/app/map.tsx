@@ -1,224 +1,67 @@
-import { useRef, useState } from 'react';
+// Trip planner. Shows the best trotro route for origin → destination first (the fastest and
+// cheapest), with the other options one tap away under "All routes". Each route is a short card;
+// tapping it opens the Trip Overview screen with every detail (stops, walks, last stretch).
+
 import { router, useLocalSearchParams } from 'expo-router';
-import { Image } from 'expo-image';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
   Dimensions,
-  LayoutChangeEvent,
-  NativeScrollEvent,
-  NativeSyntheticEvent,
   PanResponder,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
   View,
-  Image as RNImage,
 } from 'react-native';
-import MapView, { Marker, type Region } from 'react-native-maps';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { BlurView } from 'expo-blur';
-import { LinearGradient } from 'expo-linear-gradient';
+import MapView from 'react-native-maps';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText as Text } from '@/components/app-text';
-import { Palette } from '@/constants/theme';
+import { JourneyMapLayers, journeyCoordinates } from '@/components/journey-map-layers';
+import { RouteCard, routeBadges } from '@/components/route-card';
+import { Icon, IconButton, PillButton } from '@/components/ui';
 import { STREETMATE_MAP_STYLE } from '@/constants/map-style';
-import { CURRENT_LOCATION, stopsInRegion } from '@/data/stops';
+import { Palette, Radius, Shadow } from '@/constants/theme';
+import { useTripHistory } from '@/contexts/trip-history';
+import { CURRENT_LOCATION } from '@/data/stops';
+import { useCurrentLocation } from '@/hooks/use-current-location';
+import { useWalkingRoute } from '@/hooks/use-walking-route';
+import { setActiveJourney, setPreviewJourney } from '@/utils/journey-store';
+import type { Journey, PlanResult } from '@/utils/journey-planner';
 import { MAP_PROVIDER } from '@/utils/map-provider';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { runOnJS } from 'react-native-reanimated';
+import { planJourneys } from '@/utils/plan-journey';
 
-// Mock alternate routes — replace with real routing engine output later.
-// Each route carries a tripDetails array — one entry per trip/leg — swiped through on the detail screen.
-const mockAllRoutes = [
-  {
-    id: '1',
-    duration: '35 mins',
-    fare: 'GH¢ 5.00',
-    stops: ['Pantang Junction', 'UPS'],
-    trips: 1,
-    recommended: true,
-    badges: ['Fastest', 'Cheapest'],
-    tripDetails: [
-      {
-        stopName: 'UPS',
-        availableTrotro: 'Accra',
-        otherTrotros: 'Legon, Okponglo, Circle, 37, Lapaz, Kasoa, Osu, Spintex',
-        estTime: '35 mins',
-        estFare: 'GH¢ 5.00',
-        availability: 'High',
-        stopsCount: 4,
-        intermediateStops: ['Taxi Rank', 'Adenta Barrier', 'WASS', 'Kenkey House'],
-      },
-    ],
-  },
-  {
-    id: '2',
-    duration: '40 mins',
-    fare: 'GH¢ 9.00',
-    stops: ['Pantang Junction', 'Madina', 'UPS'],
-    trips: 2,
-    tripDetails: [
-      {
-        stopName: 'Madina',
-        availableTrotro: 'Madina',
-        otherTrotros: 'Atomic, Accra, Circle, 37, Lapaz, Kasoa, Osu, Spintex, Okponglo',
-        estTime: '30 mins',
-        estFare: 'GH¢ 5.00',
-        availability: 'High',
-        stopsCount: 6,
-        intermediateStops: ['Taxi Rank', 'Adenta Barrier', 'WASS', 'Kenkey House', 'Ritz Junction', 'Red Co.'],
-      },
-      {
-        stopName: 'UPS',
-        availableTrotro: 'Accra',
-        otherTrotros: 'Circle, Legon, Okponglo, 37, Lapaz, Kasoa, Osu, Spintex',
-        estTime: '10 mins',
-        estFare: 'GH¢ 4.00',
-        availability: 'High',
-        stopsCount: 1,
-        intermediateStops: ['Atomic Junction'],
-      },
-    ],
-  },
-  {
-    id: '3',
-    duration: '1 hr',
-    fare: 'GH¢ 9.50',
-    stops: ['Pantang Junction', 'Atomic', 'UPS'],
-    trips: 2,
-    tripDetails: [
-      {
-        stopName: 'Atomic',
-        availableTrotro: 'Atomic',
-        otherTrotros: 'Legon, Okponglo, Circle, 37, Lapaz, Kasoa, Osu, Spintex',
-        estTime: '45 mins',
-        estFare: 'GH¢ 6.00',
-        availability: 'Medium',
-        stopsCount: 8,
-        intermediateStops: [
-          'Taxi Rank',
-          'Adenta Barrier',
-          'WASS',
-          'Kenkey House',
-          'Ritz Junction',
-          'Red Co.',
-          'Shiashie',
-          '37 Station',
-        ],
-      },
-      {
-        stopName: 'UPS',
-        availableTrotro: 'Accra',
-        otherTrotros: 'Circle, Legon, Okponglo, 37, Lapaz, Kasoa, Osu, Spintex',
-        estTime: '15 mins',
-        estFare: 'GH¢ 3.50',
-        availability: 'High',
-        stopsCount: 2,
-        intermediateStops: ['Airport Junction', 'Ridge'],
-      },
-    ],
-  },
-];
-
-// Every Marker is a native view, so the full 3,377-stop set cannot be rendered.
-// Only what sits inside the current viewport is drawn, and even that is capped.
-const MAX_VISIBLE_STOPS = 120;
-
-// Falls back to the corridor the app is built around when no origin is passed.
-const DEFAULT_ORIGIN = { latitude: CURRENT_LOCATION.lat, longitude: CURRENT_LOCATION.lng };
-
-const toCoord = (lat?: string, lng?: string) => {
-  const latitude = Number(lat);
-  const longitude = Number(lng);
-  if (!lat || !lng || Number.isNaN(latitude) || Number.isNaN(longitude)) return null;
-  return { latitude, longitude };
-};
-
-// Frames both ends of the journey with a margin; falls back to a
-// neighbourhood-level view when there is only one point to show.
-const regionFor = (
-  origin: { latitude: number; longitude: number },
-  destination: { latitude: number; longitude: number } | null
-): Region => {
-  if (!destination) {
-    return { ...origin, latitudeDelta: 0.05, longitudeDelta: 0.05 };
-  }
-  return {
-    latitude: (origin.latitude + destination.latitude) / 2,
-    longitude: (origin.longitude + destination.longitude) / 2,
-    latitudeDelta: Math.max(Math.abs(origin.latitude - destination.latitude) * 2, 0.03),
-    longitudeDelta: Math.max(Math.abs(origin.longitude - destination.longitude) * 2, 0.03),
-  };
-};
-
-const MAX_ROUTES_HEIGHT = Dimensions.get('window').height * 0.5;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
-const SWIPE_THRESHOLD = 50;
+const SNAPS = [SCREEN_HEIGHT * 0.3, SCREEN_HEIGHT * 0.56, SCREEN_HEIGHT * 0.88];
+type Tab = 'best' | 'all';
 
-// "1 trip" vs "2 trips" — singular only when the count is exactly 1
-const tripWord = (count: number) => (count === 1 ? 'trip' : 'trips');
-const stopWord = (count: number) => (count === 1 ? 'stop' : 'stops');
+const toPoint = (lat?: string, lng?: string) => {
+  const la = Number(lat);
+  const ln = Number(lng);
+  if (!lat || !lng || Number.isNaN(la) || Number.isNaN(ln)) return null;
+  return { lat: la, lng: ln };
+};
 
-// High beats Medium beats Low — used to summarize overall availability across all legs
-const availabilityRank: Record<string, number> = { High: 2, Medium: 1, Low: 0 };
-const worstAvailability = (values: string[]) =>
-  values.reduce((worst, current) => (availabilityRank[current] < availabilityRank[worst] ? current : worst), values[0]);
+const EMPTY_MESSAGES: Record<PlanResult['reason'], { title: string; body: string }> = {
+  ok: { title: '', body: '' },
+  'origin-far': {
+    title: 'No trotro stops near you',
+    body: 'We have no mapped stops within a short walk of your starting point. Try a starting point on a main road.',
+  },
+  'destination-far': {
+    title: 'No trotro stops near that place',
+    body: 'We have no mapped stops close to this destination yet. Try a nearby junction or landmark.',
+  },
+  'no-route': {
+    title: 'No trotro route found',
+    body: 'We could not connect these two places with the routes we have. Know one? Add it in Route Hub.',
+  },
+};
 
-function RouteCard({
-  route,
-  highlighted,
-  onPress,
-}: {
-  route: (typeof mockAllRoutes)[number];
-  highlighted?: boolean;
-  onPress?: () => void;
-}) {
-  return (
-    <TouchableOpacity style={[styles.routeCard, highlighted && styles.routeCardHighlighted]} onPress={onPress}>
-      <View style={styles.routeCardTopRow}>
-        <Text weight="medium" style={styles.routeDuration}>{route.duration}</Text>
-        <Text weight="medium" style={styles.routeFare}>
-          GH¢<Text weight="medium" style={styles.routeFareAmount}>{route.fare.replace('GH¢', '').trim()}</Text>
-        </Text>
-      </View>
-
-      <Text numberOfLines={1} style={styles.routeStops}>{route.stops.join('  →  ')}</Text>
-
-      <View style={styles.routeBottomRow}>
-        <View style={styles.routeTripsGroup}>
-          <Image
-            source={require('@/assets/images/icons/trip-icon.png')}
-            style={styles.routeTripsIcon}
-            contentFit="contain"
-          />
-          <Text weight="medium" style={styles.routeTripsText}>{route.trips} {tripWord(route.trips)}</Text>
-        </View>
-
-        {route.badges && route.badges.length > 0 && (
-          <View style={styles.routeBadgesGroup}>
-            {route.badges.map((badge, index) => (
-              <View key={badge} style={styles.routeBadgeItem}>
-                <Image
-                  source={
-                    badge === 'Fastest'
-                      ? require('@/assets/images/icons/fastest.png')
-                      : require('@/assets/images/icons/cheapest.png')
-                  }
-                  style={styles.routeBadgeIcon}
-                  contentFit="contain"
-                />
-                <Text weight="medium" style={styles.routeBadgeText}>{badge}</Text>
-                {index < route.badges.length - 1 && <Text style={styles.routeBadgeDot}> · </Text>}
-              </View>
-            ))}
-          </View>
-        )}
-      </View>
-    </TouchableOpacity>
-  );
-}
-
-export default function MapScreen() {
-  const { origin, destination, destLat, destLng, originLat, originLng } = useLocalSearchParams<{
+export default function PlannerScreen() {
+  const insets = useSafeAreaInsets();
+  const { addTrip } = useTripHistory();
+  const params = useLocalSearchParams<{
     origin?: string;
     destination?: string;
     destLat?: string;
@@ -227,1217 +70,301 @@ export default function MapScreen() {
     originLng?: string;
   }>();
 
-  // Coordinates arrive from the search screen as strings; absent ones mean the
-  // screen was opened without a selected destination.
-  const originCoord = toCoord(originLat, originLng) ?? DEFAULT_ORIGIN;
-  const destinationCoord = toCoord(destLat, destLng);
+  // Start from the origin the rider chose; with none (e.g. "Get there" on a saved place) use their GPS.
+  const { coords, status: locationStatus } = useCurrentLocation();
+  const paramOrigin = toPoint(params.originLat, params.originLng);
+  const originPoint = paramOrigin ?? coords ?? { lat: CURRENT_LOCATION.lat, lng: CURRENT_LOCATION.lng };
+  const originReady = !!paramOrigin || locationStatus !== 'loading';
+  const destPoint = toPoint(params.destLat, params.destLng);
+  const originName = params.origin ?? 'Current location';
+  const destName = params.destination ?? 'Destination';
 
-  // Region drives which stops are rendered — see stopsInRegion.
-  const [region, setRegion] = useState<Region>(() => regionFor(originCoord, destinationCoord));
-  const visibleStops = stopsInRegion(region, MAX_VISIBLE_STOPS);
-  const [activeTab, setActiveTab] = useState<'best' | 'all'>('best');
-  const [otherRoutesExpanded, setOtherRoutesExpanded] = useState(true);
-  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
-  const [currentTripIndex, setCurrentTripIndex] = useState(0);
-  const [showTripOverview, setShowTripOverview] = useState(false);
-  const [expandedLegKey, setExpandedLegKey] = useState<string | null>(null);
-  const [expandAnim] = useState(() => new Animated.Value(1)); // 1 = expanded, 0 = collapsed
-  const [tripSlide] = useState(() => new Animated.Value(0));
-  const [tripOpacity] = useState(() => new Animated.Value(1));
-  const [overviewSlide] = useState(() => new Animated.Value(SCREEN_HEIGHT));
+  const mapRef = useRef<MapView>(null);
 
-  // Trotro list sheet — slides up when a leg's bus icon is tapped
-  const [showTrotroSheet, setShowTrotroSheet] = useState(false);
-  const [trotroSheetData, setTrotroSheetData] = useState<{ availableTrotro: string; otherTrotros: string[] } | null>(
-    null
+  // --- Planning (deferred one tick so the screen paints first) ---
+  const [result, setResult] = useState<PlanResult | null>(null);
+  useEffect(() => {
+    if (!destPoint || !originReady) return;
+    const timer = setTimeout(() => {
+      setResult(
+        planJourneys({ name: originName, ...originPoint }, { name: destName, ...destPoint })
+      );
+    }, 40);
+    return () => clearTimeout(timer);
+    // Params are stable for this screen's lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.destLat, params.destLng, params.originLat, params.originLng, originReady]);
+
+  const journeys = useMemo(() => result?.journeys ?? [], [result]);
+  const [tab, setTab] = useState<Tab>('best');
+
+  // The planner already ranks by time (with a small penalty per change), so the first one is the
+  // best: the fastest, and cheapest where it can be both.
+  const best: Journey | null = journeys[0] ?? null;
+  const others = journeys.slice(1);
+
+  // Real footpath for the last stretch of the best route, so the map line follows streets.
+  const lastMile = best?.lastMile ?? null;
+  const { route: walkRoute } = useWalkingRoute(lastMile?.from ?? null, lastMile?.to ?? null);
+  const walkPaths = useMemo(
+    () => (walkRoute && !walkRoute.approximate ? { 'last-mile': walkRoute.path } : {}),
+    [walkRoute]
   );
-  const [trotroSheetSlide] = useState(() => new Animated.Value(SCREEN_HEIGHT));
-  const [trotroSheetOverlayOpacity] = useState(() => new Animated.Value(0));
-  const [trotroCanScrollUp, setTrotroCanScrollUp] = useState(false);
-  const [trotroCanScrollDown, setTrotroCanScrollDown] = useState(false);
-  const trotroScrollContentHeight = useRef(0);
-  const trotroScrollLayoutHeight = useRef(0);
 
-  const selectedRoute = mockAllRoutes.find((r) => r.id === selectedRouteId) ?? null;
-  const recommendedRoute = mockAllRoutes.find((r) => r.recommended);
-  const otherRoutes = mockAllRoutes.filter((r) => !r.recommended);
-
-  // Whichever route is currently in detail view — the tapped card, or the recommended one on Best Route
-  const activeDetailRoute = selectedRoute ?? (activeTab === 'best' ? recommendedRoute : null);
-  const activeTrip = activeDetailRoute?.tripDetails[currentTripIndex] ?? null;
-
-  // Build each leg for the Trip Overview panel: from → to, stops between, and that leg's stats
-  const overviewLegs = activeDetailRoute
-    ? activeDetailRoute.tripDetails.map((trip, index) => ({
-        from: index === 0 ? activeDetailRoute.stops[0] : activeDetailRoute.tripDetails[index - 1].stopName,
-        to: trip.stopName,
-        stopsCount: trip.stopsCount,
-        intermediateStops: trip.intermediateStops ?? [],
-        estTime: trip.estTime,
-        estFare: trip.estFare,
-        availability: trip.availability,
-        availableTrotro: trip.availableTrotro,
-        otherTrotros: trip.otherTrotros,
-      }))
-    : [];
-
-  const overallAvailability = activeDetailRoute
-    ? worstAvailability(activeDetailRoute.tripDetails.map((t) => t.availability))
-    : 'High';
-
-  const animateTo = (expanded: boolean) => {
-    setOtherRoutesExpanded(expanded);
-    Animated.spring(expandAnim, {
-      toValue: expanded ? 1 : 0,
-      useNativeDriver: false,
-      friction: 8,
-      tension: 60,
-    }).start();
-  };
-
-  const goToTab = (tab: 'best' | 'all') => {
-    setSelectedRouteId(null);
-    setCurrentTripIndex(0);
-    setActiveTab(tab);
-
-    // Re-expand "Other Routes" when leaving the All Routes tab, where it can be dragged closed.
-    if (tab !== 'all' && !otherRoutesExpanded) {
-      animateTo(true);
-    }
-  };
-
-  const selectRoute = (routeId: string) => {
-    setSelectedRouteId(routeId);
-    setCurrentTripIndex(0);
-  };
-
-  const goToTripIndex = (nextIndex: number, direction: 'left' | 'right') => {
-    Animated.parallel([
-      Animated.timing(tripSlide, {
-        toValue: direction === 'left' ? -40 : 40,
-        duration: 150,
-        useNativeDriver: true,
-      }),
-      Animated.timing(tripOpacity, {
-        toValue: 0,
-        duration: 150,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      setCurrentTripIndex(nextIndex);
-      tripSlide.setValue(direction === 'left' ? 40 : -40);
-      Animated.parallel([
-        Animated.spring(tripSlide, {
-          toValue: 0,
-          useNativeDriver: true,
-          friction: 8,
-          tension: 60,
-        }),
-        Animated.timing(tripOpacity, {
-          toValue: 1,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-      ]).start();
+  // --- Sheet (drag between three heights) ---
+  const [sheetHeight] = useState(() => new Animated.Value(SNAPS[1]));
+  const sheetValue = useRef(SNAPS[1]);
+  const dragStart = useRef(SNAPS[1]);
+  useEffect(() => {
+    const id = sheetHeight.addListener(({ value }) => {
+      sheetValue.current = value;
     });
-  };
+    return () => sheetHeight.removeListener(id);
+  }, [sheetHeight]);
 
-  const handleTripSwipeEnd = (dx: number) => {
-    if (!activeDetailRoute) return;
-    const lastIndex = activeDetailRoute.tripDetails.length - 1;
-
-    if (dx < -SWIPE_THRESHOLD && currentTripIndex < lastIndex) {
-      goToTripIndex(currentTripIndex + 1, 'left');
-    } else if (dx > SWIPE_THRESHOLD && currentTripIndex > 0) {
-      goToTripIndex(currentTripIndex - 1, 'right');
-    }
-  };
-
-  const tripSwipeGesture = Gesture.Pan()
-    .activeOffsetX([-15, 15])
-    .failOffsetY([-20, 20])
-    .onEnd((event) => {
-      runOnJS(handleTripSwipeEnd)(event.translationX);
-    });
+  const snapTo = (h: number) =>
+    Animated.spring(sheetHeight, { toValue: h, useNativeDriver: false, friction: 9, tension: 70 }).start();
 
   const [panResponder] = useState(() =>
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dy) > 5,
-      onPanResponderRelease: (_, gestureState) => {
-        if (gestureState.dy > 15) {
-          animateTo(false);
-        } else if (gestureState.dy < -15) {
-          animateTo(true);
-        }
+      onPanResponderGrant: () => {
+        dragStart.current = sheetValue.current;
+      },
+      onPanResponderMove: (_, g) => {
+        const next = Math.min(SNAPS[2], Math.max(SNAPS[0], dragStart.current - g.dy));
+        sheetHeight.setValue(next);
+      },
+      onPanResponderRelease: (_, g) => {
+        const projected = sheetValue.current - g.vy * 120;
+        const nearest = SNAPS.reduce((a, b) => (Math.abs(b - projected) < Math.abs(a - projected) ? b : a));
+        snapTo(nearest);
       },
     })
   );
 
-  const openTripOverview = () => {
-    setExpandedLegKey(null);
-    setShowTripOverview(true);
-    Animated.spring(overviewSlide, {
-      toValue: 0,
-      useNativeDriver: true,
-      friction: 9,
-      tension: 60,
-    }).start();
+  // Frame the selected journey above the sheet.
+  useEffect(() => {
+    if (!best) return;
+    const timer = setTimeout(() => {
+      mapRef.current?.fitToCoordinates(journeyCoordinates(best), {
+        edgePadding: { top: insets.top + 140, right: 50, bottom: SNAPS[1] + 30, left: 50 },
+        animated: true,
+      });
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [best, insets.top]);
+
+  const openOverview = (journey: Journey) => {
+    setPreviewJourney(journey);
+    router.push({ pathname: '/trip-overview', params: { origin: originName, destination: destName } });
   };
 
-  const closeTripOverview = () => {
-    Animated.timing(overviewSlide, {
-      toValue: SCREEN_HEIGHT,
-      duration: 250,
-      useNativeDriver: true,
-    }).start(() => setShowTripOverview(false));
+  const startJourney = () => {
+    if (!best) return;
+    setActiveJourney(best);
+    addTrip(best);
+    router.push({ pathname: '/journey', params: { origin: originName, destination: destName } });
   };
 
-  const openTrotroSheet = (availableTrotro: string, otherTrotros: string) => {
-    setTrotroSheetData({
-      availableTrotro,
-      otherTrotros: otherTrotros.split(',').map((s) => s.trim()).filter(Boolean),
-    });
-    setShowTrotroSheet(true);
-    Animated.parallel([
-      Animated.timing(trotroSheetOverlayOpacity, {
-        toValue: 1,
-        duration: 250,
-        useNativeDriver: true,
-      }),
-      Animated.spring(trotroSheetSlide, {
-        toValue: 0,
-        useNativeDriver: true,
-        friction: 9,
-        tension: 60,
-      }),
-    ]).start();
-  };
-
-  const closeTrotroSheet = () => {
-    Animated.parallel([
-      Animated.timing(trotroSheetOverlayOpacity, {
-        toValue: 0,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-      Animated.timing(trotroSheetSlide, {
-        toValue: SCREEN_HEIGHT,
-        duration: 250,
-        useNativeDriver: true,
-      }),
-    ]).start(() => setShowTrotroSheet(false));
-  };
-
-  const evaluateTrotroScrollFades = (offsetY: number) => {
-    const maxScroll = trotroScrollContentHeight.current - trotroScrollLayoutHeight.current;
-    setTrotroCanScrollUp(offsetY > 4);
-    setTrotroCanScrollDown(offsetY < maxScroll - 4);
-  };
-
-  const handleTrotroScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    evaluateTrotroScrollFades(e.nativeEvent.contentOffset.y);
-  };
-
-  const handleTrotroScrollLayout = (e: LayoutChangeEvent) => {
-    trotroScrollLayoutHeight.current = e.nativeEvent.layout.height;
-    evaluateTrotroScrollFades(0);
-  };
-
-  const handleTrotroScrollContentSizeChange = (_width: number, height: number) => {
-    trotroScrollContentHeight.current = height;
-    evaluateTrotroScrollFades(0);
-  };
+  const loading = destPoint !== null && result === null;
+  const empty = result && result.journeys.length === 0 ? EMPTY_MESSAGES[result.reason] : null;
 
   return (
     <View style={styles.container}>
-      {/* Live map. Apple Maps on iOS needs no API key; do not pass PROVIDER_GOOGLE. */}
-      <MapView        
+      <MapView
+        ref={mapRef}
         provider={MAP_PROVIDER}
         customMapStyle={STREETMATE_MAP_STYLE}
         style={StyleSheet.absoluteFill}
-        initialRegion={region}
-        onRegionChangeComplete={setRegion}
+        initialRegion={{
+          latitude: originPoint.lat,
+          longitude: originPoint.lng,
+          latitudeDelta: 0.06,
+          longitudeDelta: 0.06,
+        }}
         showsUserLocation
         showsMyLocationButton={false}
-        showsCompass={false}>
-        {visibleStops.map((stop) => (
-          <Marker
-            key={stop.id}
-            coordinate={{ latitude: stop.lat, longitude: stop.lng }}
-            title={stop.name}
-            anchor={{ x: 0.5, y: 0.5 }}
-            tracksViewChanges={false}>
-            <RNImage
-              source={require('@/assets/images/icons/bus-stop.png')}
-              style={styles.stopMarkerIcon}
-              resizeMode="contain"
-            />
-          </Marker>
-        ))}
-
-        {destinationCoord && (
-          <Marker
-            coordinate={destinationCoord}
-            title={destination ?? 'Destination'}
-            pinColor={Palette.Red}
-          />
-        )}
+        showsCompass={false}
+        toolbarEnabled={false}>
+        {best && <JourneyMapLayers journey={best} walkPaths={walkPaths} />}
       </MapView>
 
-      <SafeAreaView style={styles.topBarSafeArea} edges={['top']}>
-        <View style={styles.topBar}>
-          <TouchableOpacity onPress={() => router.back()}>
-            <Image
-              source={require('@/assets/images/icons/chevron-left.png')}
-              style={styles.backIcon}
-              contentFit="contain"
-            />
-          </TouchableOpacity>
-          <Text weight="medium" style={styles.topBarRoute} numberOfLines={1}>
-            <Text weight="medium" style={styles.topBarOrigin}>{origin ?? 'Current location'}</Text>
-            {'  →  '}
-            <Text weight="medium" style={styles.topBarDestination}>{destination ?? 'Destination'}</Text>
-          </Text>
-        </View>
-      </SafeAreaView>
-
-      {/* Bottom sheet */}
-      <View style={styles.bottomSheet}>
-        <View
-          style={styles.dragHandle}
-          {...panResponder.panHandlers}
-          hitSlop={{ top: 15, bottom: 15, left: 40, right: 40 }}
-        />
-
-        <View style={styles.tabsRow}>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'best' && !selectedRoute && styles.tabActive]}
-            onPress={() => goToTab('best')}>
-            <Text
-              weight={activeTab === 'best' && !selectedRoute ? 'semibold' : 'medium'}
-              style={[styles.tabText, activeTab === 'best' && !selectedRoute && styles.tabTextActive]}>
-              BEST ROUTE
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'all' && !selectedRoute && styles.tabActive]}
-            onPress={() => goToTab('all')}>
-            <Text
-              weight={activeTab === 'all' && !selectedRoute ? 'semibold' : 'medium'}
-              style={[styles.tabText, activeTab === 'all' && !selectedRoute && styles.tabTextActive]}>
-              ALL ROUTES
-            </Text>
-          </TouchableOpacity>
-
-          {activeDetailRoute ? (
-            <Text style={styles.tripCount}>
-              <Text weight="semibold" style={styles.tripCountActive}>{currentTripIndex + 1}</Text>
-              <Text weight="medium" style={styles.tripCount}>
-                {' '}of {activeDetailRoute.trips} {tripWord(activeDetailRoute.trips)}
-              </Text>
-            </Text>
-          ) : (
-            <Text weight="medium" style={styles.tripCount}>{mockAllRoutes.length} routes found</Text>
-          )}
-        </View>
-
-        {activeDetailRoute && activeTrip ? (
-          <>
-            <GestureDetector gesture={tripSwipeGesture}>
-              <Animated.View style={{ transform: [{ translateX: tripSlide }], opacity: tripOpacity }}>
-                <TouchableOpacity style={styles.stopCard} onPress={openTripOverview} activeOpacity={0.8}>
-                  <View style={styles.stopCardRow}>
-                    <View>
-                      <Text weight="medium" style={styles.stopCardLabel}>Stop Name</Text>
-                      <Text weight="medium" style={styles.stopCardValue}>{activeTrip.stopName}</Text>
-                    </View>
-                    <View style={styles.stopCardRight}>
-                      <Text weight="medium" style={styles.stopCardLabel}>Available Trotro</Text>
-                      <Text weight="medium" style={styles.stopCardValue}>{activeTrip.availableTrotro}</Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.stopCardBottomRow}>
-                    <View style={styles.otherTrotrosGroup}>
-                      <Text weight="medium" style={styles.stopCardLabel}>Other Trotros on Route</Text>
-                      <Text numberOfLines={2} style={styles.otherTrotrosText}>{activeTrip.otherTrotros}</Text>
-                    </View>
-                    <View style={styles.stopCardArrowButton}>
-                      <Image
-                        source={require('@/assets/images/icons/arrow-circle-right.png')}
-                        style={styles.stopCardArrowIcon}
-                        contentFit="contain"
-                      />
-                    </View>
-                  </View>
-                </TouchableOpacity>
-
-                <View style={styles.statsRow}>
-                  <View style={styles.statItem}>
-                    <Image
-                      source={require('@/assets/images/icons/estimated-time.png')}
-                      style={styles.statIcon}
-                      contentFit="contain"
-                    />
-                    <View>
-                      <Text weight="medium" style={styles.statLabel}>Est. Time</Text>
-                      <Text weight="medium" style={styles.statValue}>{activeTrip.estTime}</Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.statItem}>
-                    <Image
-                      source={require('@/assets/images/icons/estimated-fare.png')}
-                      style={styles.statIcon}
-                      contentFit="contain"
-                    />
-                    <View>
-                      <Text weight="medium" style={styles.statLabel}>Est. Fare</Text>
-                      <Text weight="medium" style={styles.statValue}>{activeTrip.estFare}</Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.statItem}>
-                    <Image
-                      source={require('@/assets/images/icons/availability-status.png')}
-                      style={styles.statIcon}
-                      contentFit="contain"
-                    />
-                    <View>
-                      <Text weight="medium" style={styles.statLabel}>Availability</Text>
-                      <View style={styles.availabilityRow}>
-                        <View style={styles.availabilityDot} />
-                        <Text weight="medium" style={styles.statValue}>{activeTrip.availability}</Text>
-                      </View>
-                    </View>
-                  </View>
-                </View>
-              </Animated.View>
-            </GestureDetector>
-
-            <TouchableOpacity
-              style={styles.startButton}
-              onPress={() =>
-                router.push({
-                  pathname: '/journey',
-                  params: {
-                    origin,
-                    destination,
-                    tripIndex: '0',
-                    totalTrips: String(activeDetailRoute?.trips ?? 1),
-                    routeId: activeDetailRoute?.id ?? '',
-                  },
-                })
-              }>
-              <Text weight="medium" style={styles.startButtonText}>Start Journey</Text>
-            </TouchableOpacity>
-          </>
-        ) : (
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            style={{ maxHeight: MAX_ROUTES_HEIGHT }}>
-            {recommendedRoute && (
-              <View style={styles.routeSection}>
-                <Text weight="semibold" style={styles.routeSectionTitle}>Recommended</Text>
-                <RouteCard route={recommendedRoute} highlighted onPress={() => selectRoute(recommendedRoute.id)} />
-              </View>
-            )}  
-
-            {otherRoutes.length > 0 && (
-              <Animated.View
-                style={[
-                  styles.routeSectionLast,
-                  {
-                    opacity: expandAnim,
-                    maxHeight: expandAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0, 600],
-                    }),
-                    overflow: 'hidden',
-                  },
-                ]}>
-                <View style={styles.routeSection}>
-                  <Text weight="semibold" style={styles.routeSectionTitle}>Other Routes</Text>
-                  {otherRoutes.map((route) => (
-                    <RouteCard key={route.id} route={route} onPress={() => selectRoute(route.id)} />
-                  ))}
-                </View>
-              </Animated.View>
-            )}
-          </ScrollView>
-        )}
+      {/* Back + route card */}
+      <View style={[styles.topBar, { top: insets.top + 8 }]} pointerEvents="box-none">
+        <IconButton name="arrow-back" floating onPress={() => router.back()} accessibilityLabel="Back" />
+        <TouchableOpacity style={styles.routeCard} activeOpacity={0.9} onPress={() => router.back()}>
+          <View style={styles.routeRail}>
+            <View style={styles.routeDotOrigin} />
+            <View style={styles.routeRailLine} />
+            <View style={styles.routeDotDest} />
+          </View>
+          <View style={styles.routeText}>
+            <Text numberOfLines={1} weight="medium" style={styles.routeFrom}>{originName}</Text>
+            <Text numberOfLines={1} weight="medium" style={styles.routeTo}>{destName}</Text>
+          </View>
+        </TouchableOpacity>
       </View>
 
-      {/* Trip Overview — slides up from the bottom, covering the map + bottom sheet */}
-      {showTripOverview && (
-        <Animated.View style={[styles.overviewPanel, { transform: [{ translateY: overviewSlide }] }]}>
-          <SafeAreaView style={styles.overviewSafeArea} edges={[]}>
-            <View style={styles.overviewHeader}>
-              <TouchableOpacity style={styles.overviewHeaderLeft} onPress={closeTripOverview}>
-                <Image
-                  source={require('@/assets/images/icons/chevron-left.png')}
-                  style={styles.backIcon}
-                  contentFit="contain"
-                />
-                <Text weight="medium" style={styles.overviewTitle}>Trip Overview</Text>
-              </TouchableOpacity>
+      {/* Bottom sheet */}
+      <Animated.View style={[styles.sheet, { height: sheetHeight }]}>
+        <View {...panResponder.panHandlers} style={styles.handleZone}>
+          <View style={styles.handle} />
+        </View>
+
+        {loading && (
+          <View style={styles.centered}>
+            <ActivityIndicator color={Palette.Black} />
+            <Text weight="medium" style={styles.centeredText}>Finding trotros…</Text>
+          </View>
+        )}
+
+        {!destPoint && (
+          <View style={styles.centered}>
+            <Text weight="bold" style={styles.emptyTitle}>Choose a destination</Text>
+            <Text style={styles.emptyBody}>Go back and search for where you want to go.</Text>
+          </View>
+        )}
+
+        {empty && (
+          <View style={styles.centered}>
+            <Icon name="bus-outline" size={36} color={Palette.Placeholder} />
+            <Text weight="bold" style={styles.emptyTitle}>{empty.title}</Text>
+            <Text style={styles.emptyBody}>{empty.body}</Text>
+            <PillButton label="Route Hub" variant="subtle" small onPress={() => router.push('/route-hub')} style={{ marginTop: 14 }} />
+          </View>
+        )}
+
+        {best && (
+          <>
+            {/* Best route | All routes */}
+            <View style={styles.tabRow}>
+              <View style={styles.tabs}>
+                {(['best', 'all'] as const).map((t) => {
+                  const active = tab === t;
+                  return (
+                    <TouchableOpacity
+                      key={t}
+                      accessibilityRole="tab"
+                      accessibilityState={{ selected: active }}
+                      activeOpacity={0.8}
+                      onPress={() => setTab(t)}
+                      style={[styles.tab, active && styles.tabActive]}>
+                      <Text weight="medium" style={[styles.tabText, active && styles.tabTextActive]}>
+                        {t === 'best' ? 'Best route' : 'All routes'}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <Text style={styles.count}>{journeys.length} {journeys.length === 1 ? 'route' : 'routes'}</Text>
             </View>
 
-            <View style={styles.overviewRoutePill}>
-              <Text weight="medium" style={styles.overviewRouteText} numberOfLines={1}>
-                {origin ?? 'Current location'}  →  {destination ?? 'Destination'}
-              </Text>
-            </View>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={[styles.scroll, { paddingBottom: (tab === 'best' ? 110 : 24) + insets.bottom }]}>
+              <Text weight="bold" style={styles.sectionLabel}>Recommended</Text>
+              <RouteCard journey={best} badges={routeBadges(best, journeys)} featured onPress={() => openOverview(best)} />
 
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.overviewScrollContent}>
-              {overviewLegs.map((leg, index) => {
-                const legKey = `${leg.from}-${leg.to}`;
-                const isExpanded = expandedLegKey === legKey;
+              {tab === 'best' && others.length > 0 && (
+                <TouchableOpacity style={styles.moreLink} activeOpacity={0.7} onPress={() => setTab('all')}>
+                  <Text weight="medium" style={styles.moreText}>
+                    See {others.length} other {others.length === 1 ? 'route' : 'routes'}
+                  </Text>
+                  <Icon name="chevron-forward" size={16} />
+                </TouchableOpacity>
+              )}
 
-                return (
-                  <View key={legKey} style={styles.legCard}>
-                    <View style={styles.legHeaderRow}>
-                      <View style={styles.legHeaderLeft}>
-                        <View style={styles.legBadge}>
-                          <Text weight="semibold" style={styles.legBadgeText}>{index + 1}</Text>
-                        </View>
-                        <Text weight="semibold" style={styles.legHeaderText}>
-                          {leg.from}  →  {leg.to}
-                        </Text>
-                      </View>
-                      <TouchableOpacity
-                        style={styles.legTrotroButton}
-                        onPress={() => openTrotroSheet(leg.availableTrotro, leg.otherTrotros)}>
-                        <Image
-                          source={require('@/assets/images/icons/bus.png')}
-                          style={styles.legTrotroButtonIcon}
-                          contentFit="contain"
-                        />
-                      </TouchableOpacity>
-                    </View>
+              {tab === 'all' && others.length > 0 && (
+                <>
+                  <Text weight="bold" style={[styles.sectionLabel, { marginTop: 18 }]}>Other routes</Text>
+                  {others.map((journey) => (
+                    <RouteCard
+                      key={journey.id}
+                      journey={journey}
+                      badges={routeBadges(journey, journeys)}
+                      onPress={() => openOverview(journey)}
+                    />
+                  ))}
+                </>
+              )}
+            </ScrollView>
 
-                    <View style={styles.legStopsColumn}>
-                      <View style={styles.legStopRow}>
-                        <View style={styles.legDot} />
-                        <Text style={styles.legStopText}>{leg.from}</Text>
-                      </View>
-                      <View style={styles.legStopsLine} />
-
-                      {isExpanded ? (
-                        <>
-                          {leg.intermediateStops.map((stopName, stopIndex) => (
-                            <View key={stopName}>
-                              <TouchableOpacity
-                                style={styles.legStopRow}
-                                onPress={() => setExpandedLegKey(null)}>
-                                <View style={styles.legHollowDot} />
-                                <Text style={styles.legIntermediateStopText}>{stopName}</Text>
-                              </TouchableOpacity>
-                              {stopIndex < leg.intermediateStops.length - 1 && (
-                                <View style={styles.legStopsLine} />
-                              )}
-                            </View>
-                          ))}
-                        </>
-                      ) : (
-                        <TouchableOpacity
-                          style={styles.legStopRow}
-                          onPress={() => setExpandedLegKey(legKey)}>
-                          <Text style={styles.legStopsBetweenText}>⋮  {leg.stopsCount} {stopWord(leg.stopsCount)}</Text>
-                        </TouchableOpacity>
-                      )}
-
-                      <View style={styles.legStopsLine} />
-                      <View style={styles.legStopRow}>
-                        <View style={styles.legDot} />
-                        <Text style={styles.legStopText}>{leg.to}</Text>
-                      </View>
-                    </View>
-
-                    <View style={styles.legDivider} />
-
-                    <View style={[styles.statsRow, styles.legStatsRow]}>
-                      <View style={styles.statItem}>
-                        <Image
-                          source={require('@/assets/images/icons/estimated-time.png')}
-                          style={styles.statIcon}
-                          contentFit="contain"
-                        />
-                        <View>
-                          <Text weight="medium" style={styles.statLabel}>Est. Time</Text>
-                          <Text weight="medium" style={styles.statValue}>{leg.estTime}</Text>
-                        </View>
-                      </View>
-
-                      <View style={styles.statItem}>
-                        <Image
-                          source={require('@/assets/images/icons/estimated-fare.png')}
-                          style={styles.statIcon}
-                          contentFit="contain"
-                        />
-                        <View>
-                          <Text weight="medium" style={styles.statLabel}>Est. Fare</Text>
-                          <Text weight="medium" style={styles.statValue}>{leg.estFare}</Text>
-                        </View>
-                      </View>
-
-                      <View style={styles.statItem}>
-                        <Image
-                          source={require('@/assets/images/icons/availability-status.png')}
-                          style={styles.statIcon}
-                          contentFit="contain"
-                        />
-                        <View>
-                          <Text weight="medium" style={styles.statLabel}>Availability</Text>
-                          <View style={styles.availabilityRow}>
-                            <View style={styles.availabilityDot} />
-                            <Text weight="medium" style={styles.statValue}>{leg.availability}</Text>
-                          </View>
-                        </View>
-                      </View>
-                    </View>
-                  </View>
-                );
-              })}
-              </ScrollView>
-
-              {activeDetailRoute && (
-              <View style={styles.summaryCardFixed}>
-                <Text weight="semibold" style={styles.summaryTitle}>Trip Summary</Text>
-
-                <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Number of Trips</Text>
-                  <Text weight="medium" style={styles.summaryValue}>{activeDetailRoute.trips}</Text>
-                </View>
-                <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Estimated Time</Text>
-                  <Text weight="medium" style={styles.summaryValue}>{activeDetailRoute.duration}</Text>
-                </View>
-                <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Estimated Fare</Text>
-                  <Text weight="medium" style={styles.summaryValue}>{activeDetailRoute.fare}</Text>
-                </View>
-                <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Availability</Text>
-                  <Text weight="medium" style={styles.summaryValue}>{overallAvailability}</Text>
-                </View>
+            {tab === 'best' && (
+              <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 12) + 4 }]}>
+                <PillButton label="Start journey" onPress={startJourney} />
               </View>
             )}
-          </SafeAreaView>
-        </Animated.View>
-      )}
-
-      {/* Trotro list sheet — slides up with a blurred backdrop, same pattern as the sidebar */}
-      {showTrotroSheet && trotroSheetData && (
-        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-          <Animated.View style={[styles.trotroOverlay, { opacity: trotroSheetOverlayOpacity }]}>
-            <BlurView intensity={10} tint="dark" style={StyleSheet.absoluteFill} />
-            <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={closeTrotroSheet} />
-          </Animated.View>
-
-          <Animated.View style={[styles.trotroSheet, { transform: [{ translateY: trotroSheetSlide }] }]}>
-            <View style={styles.dragHandle} />
-
-            <Text weight="semibold" style={styles.trotroSheetLabel}>Available Trotro</Text>
-            <View style={styles.trotroChip}>
-              <Image
-                source={require('@/assets/images/icons/bus.png')}
-                style={styles.trotroChipIcon}
-                contentFit="contain"
-              />
-              <Text weight="medium" style={styles.trotroChipText}>{trotroSheetData.availableTrotro}</Text>
-            </View>
-
-            {trotroSheetData.otherTrotros.length > 0 && (
-              <>
-                <Text weight="semibold" style={[styles.trotroSheetLabel, styles.trotroSheetLabelSpaced]}>
-                  Other Trotros on Route
-                </Text>
-                <View style={styles.trotroListWrap}>
-                  <ScrollView
-                    style={styles.trotroListScroll}
-                    showsVerticalScrollIndicator={false}
-                    onScroll={handleTrotroScroll}
-                    scrollEventThrottle={16}
-                    onLayout={handleTrotroScrollLayout}
-                    onContentSizeChange={handleTrotroScrollContentSizeChange}>
-                    {trotroSheetData.otherTrotros.map((name) => (
-                      <View key={name} style={styles.trotroChip}>
-                        <Image
-                          source={require('@/assets/images/icons/bus.png')}
-                          style={styles.trotroChipIcon}
-                          contentFit="contain"
-                        />
-                        <Text weight="medium" style={styles.trotroChipText}>{name}</Text>
-                      </View>
-                    ))}
-                  </ScrollView>
-
-                  {trotroCanScrollUp && (
-                    <LinearGradient
-                      colors={[Palette.White, 'rgba(255,255,255,0.6)', 'rgba(255,255,255,0)']}
-                      locations={[0, 0.5, 1]}
-                      style={styles.trotroFadeTop}
-                      pointerEvents="none"
-                    />
-                  )}
-                  {trotroCanScrollDown && (
-                    <LinearGradient
-                      colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.6)', Palette.White]}
-                      locations={[0, 0.5, 1]}
-                      style={styles.trotroFadeBottom}
-                      pointerEvents="none"
-                    />
-                  )}
-                </View>
-              </>
-            )}
-          </Animated.View>
-        </View>
-      )}
+          </>
+        )}
+      </Animated.View>
     </View>
   );
 }
 
-// Local replacement for StyleSheet.absoluteFillObject, which is missing from the
-// current type definitions. Same four properties, spread into styles below.
-const fillParent = {
-  position: 'absolute' as const,
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-};
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Palette.GrayBackground,
-  },
-  stopMarkerIcon: {
-    width: 26,
-    height: 26,
-  },
-  topBarSafeArea: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-  },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: Palette.White,
-    marginHorizontal: 20,
-    marginTop: 10,
-    padding: 10,
-    borderRadius: 10,
-    shadowColor: Palette.Black,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 8,
-  },
-  backIcon: {
-    width: 30,
-    height: 30,
-  },
-  topBarRoute: {
-    flex: 1,
-    fontSize: 14,
-    color: Palette.CustomBlack,
-    textAlign: 'right',
-    marginRight: 10,
-  },
-  topBarOrigin: {
-    fontSize: 14,
-    color: Palette.DarkGray,
-  },
-  topBarDestination: {
-    fontSize: 14,
-    color: Palette.CustomBlack,
-  },
-  bottomSheet: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: Palette.White,
-    borderRadius: 20,
-    paddingTop: 10,
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-    margin: 20,
-  },
-  dragHandle: {
-    alignSelf: 'center',
-    width: 40,
-    height: 5,
-    borderRadius: 5,
-    backgroundColor: Palette.LightGray,
-    marginBottom: 20,
-  },
-  tabsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 20,
-  },
-  tab: {
-    borderColor: Palette.LightGray,
-    borderRadius: 10,
-    paddingVertical: 5,
-    paddingHorizontal: 10,
-  },
-  tabActive: {
-    borderWidth: 1,
-    borderColor: Palette.CustomBlack,
-  },
-  tabText: {
-    fontSize: 14,
-    color: Palette.DarkGray,
-  },
-  tabTextActive: {
-    color: Palette.CustomBlack,
-  },
-  tripCount: {
-    marginLeft: 'auto',
-    fontSize: 13,
-    color: Palette.DarkGray,
-  },
-  tripCountActive: {
-    fontSize: 13,
-    color: Palette.CustomBlack,
-  },
-  stopCard: {
-    borderWidth: 1,
-    borderColor: Palette.LightGray,
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 20,
-  },
-  stopCardRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  stopCardRight: {
-    alignItems: 'flex-end',
-  },
-  stopCardLabel: {
-    fontSize: 14,
-    color: Palette.DarkGray,
-    marginBottom: 0,
-  },
-  stopCardValue: {
-    fontSize: 32,
-    color: Palette.CustomBlack,
-  },
-  stopCardBottomRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    marginTop: 18,
-  },
-  otherTrotrosGroup: {
-    flex: 1,
-    marginRight: 12,
-  },
-  otherTrotrosText: {
-    fontSize: 16,
-    color: Palette.CustomBlack,
-    lineHeight: 18,
-  },
-  stopCardArrowButton: {
-    width: 30,
-    height: 30,
-  },
-  stopCardArrowIcon: {
-    width: 30,
-    height: 30,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 20,
-  },
-  statItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  statIcon: {
-    width: 20,
-    height: 20,
-  },
-  statLabel: {
-    fontSize: 14,
-    color: Palette.DarkGray,
-  },
-  statValue: {
-    fontSize: 16,
-    color: Palette.CustomBlack,
-  },
-  availabilityRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  availabilityDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: Palette.Green,
-  },
-  startButton: {
-    backgroundColor: Palette.CustomBlack,
-    borderRadius: 10,
-    paddingVertical: 20,
-    alignItems: 'center',
-  },
-  startButtonText: {
-    color: Palette.White,
-    fontSize: 16,
-  },
-  routeSection: {
-    marginBottom: 20,
-  },
-  routeSectionTitle: {
-    paddingBottom: 10,
-    fontSize: 16,
-  },
-  routeSectionLast: {
-    marginBottom: 0,
-  },
+  container: { flex: 1, backgroundColor: Palette.Soft },
+
+  topBar: { position: 'absolute', left: 16, right: 16, flexDirection: 'row', alignItems: 'center', gap: 12 },
   routeCard: {
-    borderWidth: 1,
-    borderColor: Palette.LightGray,
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 10,
-  },
-  routeCardHighlighted: {
-    borderColor: Palette.CustomBlack,
-  },
-  routeCardTopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 5,
-  },
-  routeDuration: {
-    fontSize: 24,
-    color: Palette.CustomBlack,
-  },
-  routeFare: {
-    fontSize: 16,
-    color: Palette.CustomBlack,
-  },
-  routeFareAmount: {
-    fontSize: 24,
-    color: Palette.CustomBlack,
-  },
-  routeStops: {
-    fontSize: 16,
-    color: Palette.CustomBlack,
-    marginBottom: 10,
-  },
-  routeBottomRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  routeTripsGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  routeTripsIcon: {
-    width: 16,
-    height: 16,
-  },
-  routeTripsText: {
-    fontSize: 14,
-    color: Palette.DarkGray,
-  },
-  routeBadgesGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  routeBadgeItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  routeBadgeIcon: {
-    width: 16,
-    height: 16,
-  },
-  routeBadgeText: {
-    fontSize: 14,
-    color: Palette.DarkGray,
-  },
-  routeBadgeDot: {
-    fontSize: 16,
-    color: Palette.DarkGray,
-  },
-  overviewPanel: {
-    position: 'absolute',
-    top: 60,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: Palette.White,
-    borderTopLeftRadius: 30,
-    borderTopRightRadius: 30,
-    shadowColor: Palette.Black,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 8,
-  },
-  overviewSafeArea: {
     flex: 1,
-  },
-  overviewHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 20,
-  },
-  overviewHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  overviewTitle: {
-    fontSize: 18,
-    color: Palette.CustomBlack,
-  },
-  overviewRoutePill: {
+    gap: 12,
     backgroundColor: Palette.White,
-    borderRadius: 10,
-    marginHorizontal: 20,
-    marginVertical: 20,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderWidth: 1,
-    borderColor: Palette.Black,
-    shadowColor: Palette.Black,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 8,
+    borderRadius: Radius.xl,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    ...Shadow.float,
   },
-  overviewRouteText: {
-    fontSize: 14,
-    color: Palette.CustomBlack,
-  },
-  overviewScrollContent: {
-    paddingHorizontal: 20,
-  },
-  legCard: {
-    borderRadius: 20,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: Palette.LightGray,
-    marginBottom: 20,
-  },
-  legHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: Palette.GrayBackground,
-    paddingVertical: 20,
-    paddingHorizontal: 20,
-  },
-  legHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    flex: 1,
-    marginRight: 10,
-  },
-  legTrotroButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: Palette.CustomBlack,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  legTrotroButtonIcon: {
-    width: 20,
-    height: 20,
-  },
-  legBadge: {
-    width: 30,
-    height: 30,
-    borderRadius: 5,
-    backgroundColor: Palette.CustomBlack,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  legBadgeText: {
-    fontSize: 14,
-    color: Palette.White,
-  },
-  legHeaderText: {
-    fontSize: 16,
-    color: Palette.CustomBlack,
-    flexShrink: 1,
-  },
-  legStopsColumn: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
-  },
-  legStopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    minHeight: 20,
-  },
-  legDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: Palette.CustomBlack,
-  },
-  legHollowDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    borderWidth: 1.5,
-    borderColor: Palette.DarkGray,
-    backgroundColor: Palette.White,
-  },
-  legIntermediateStopText: {
-    fontSize: 16,
-    color: Palette.DarkGray,
-  },
-  legStopText: {
-    fontSize: 16,
-    color: Palette.CustomBlack,
-  },
-  legStopsLine: {
-    width: 1,
-    height: 20,
-    backgroundColor: Palette.LightGray,
-    marginLeft: 4,
-  },
-  legStopsBetweenText: {
-    fontSize: 14,
-    color: Palette.DarkGray,
-  },
-  legDivider: {
-    height: 1,
-    backgroundColor: Palette.LightGray,
-    marginHorizontal: 20,
-    marginTop: 20,
-    marginBottom: 20,
-  },
-  legStatsRow: {
-    paddingHorizontal: 20,
-  },
-  summaryCard: {
-    backgroundColor: Palette.GrayBackground,
-    borderRadius: 20,
-    padding: 20,
-  },
-  summaryCardFixed: {
-    backgroundColor: Palette.GrayBackground,
-    borderRadius: 20,
-    padding: 20,
-    marginHorizontal: 20,
-    marginVertical: 20,
-    borderWidth: 1,
-    borderColor: Palette.Placeholder,
-  },
-  summaryTitle: {
-    fontSize: 16,
-    color: Palette.CustomBlack,
-    marginBottom: 10,
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 5,
-  },
-  summaryLabel: {
-    fontSize: 14,
-    color: Palette.DarkGray,
-  },
-  summaryValue: {
-    fontSize: 14,
-    color: Palette.CustomBlack,
-  },
-  trotroOverlay: {
-    ...fillParent,
-    backgroundColor: 'rgba(0,0,0,0.3)',
-  },
-  trotroSheet: {
+  routeRail: { alignItems: 'center', width: 12 },
+  routeDotOrigin: { width: 10, height: 10, borderRadius: 5, backgroundColor: Palette.Black },
+  routeRailLine: { width: 2, height: 14, backgroundColor: Palette.LightGray, marginVertical: 2 },
+  routeDotDest: { width: 10, height: 10, backgroundColor: Palette.Black },
+  routeText: { flex: 1, gap: 8 },
+  routeFrom: { fontSize: 14, color: Palette.DarkGray },
+  routeTo: { fontSize: 15, color: Palette.Black },
+
+  sheet: {
     position: 'absolute',
+    left: 0,
+    right: 0,
     bottom: 0,
-    left: 0,
-    right: 0,
     backgroundColor: Palette.White,
-    borderRadius: 20,
-    paddingTop: 10,
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-    margin: 20,
-    maxHeight: '70%',
+    borderTopLeftRadius: Radius.sheet,
+    borderTopRightRadius: Radius.sheet,
+    ...Shadow.card,
   },
-  trotroSheetLabel: {
-    fontSize: 16,
-    color: Palette.CustomBlack,
-    marginBottom: 10,
-  },
-  trotroSheetLabelSpaced: {
-    marginTop: 10,
-  },
-  trotroListWrap: {
-    position: 'relative',
-  },
-  trotroListScroll: {
-    maxHeight: 250,
-  },
-  trotroFadeTop: {
+  handleZone: { alignItems: 'center', paddingTop: 10, paddingBottom: 10 },
+  handle: { width: 40, height: 4, borderRadius: 2, backgroundColor: Palette.LightGray },
+  scroll: { paddingHorizontal: 16 },
+
+  tabRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, marginBottom: 14, gap: 12 },
+  tabs: { flexDirection: 'row', backgroundColor: Palette.Soft, borderRadius: Radius.pill, padding: 4 },
+  tab: { height: 36, paddingHorizontal: 16, borderRadius: Radius.pill, alignItems: 'center', justifyContent: 'center' },
+  tabActive: { backgroundColor: Palette.Black },
+  tabText: { fontSize: 14, color: Palette.DarkGray },
+  tabTextActive: { color: Palette.White },
+  count: { fontSize: 13, color: Palette.DarkGray },
+
+  sectionLabel: { fontSize: 15, color: Palette.Black, marginBottom: 10, paddingHorizontal: 2 },
+  moreLink: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, height: 44 },
+  moreText: { fontSize: 15, color: Palette.Black },
+
+  footer: {
     position: 'absolute',
-    top: 0,
     left: 0,
     right: 0,
-    height: 30,
-  },
-  trotroFadeBottom: {
-    position: 'absolute',
     bottom: 0,
-    left: 0,
-    right: 0,
-    height: 30,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    backgroundColor: Palette.White,
+    borderTopWidth: 1,
+    borderTopColor: Palette.Soft,
   },
-  trotroChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    borderWidth: 1,
-    borderColor: Palette.LightGray,
-    borderRadius: 15,
-    paddingVertical: 20,
-    paddingHorizontal: 20,
-    marginBottom: 10,
-  },
-  trotroChipIcon: {
-    width: 20,
-    height: 20,
-  },
-  trotroChipText: {
-    fontSize: 16,
-    color: Palette.CustomBlack,
-  },
+
+  centered: { alignItems: 'center', paddingHorizontal: 32, paddingTop: 24, gap: 10 },
+  centeredText: { fontSize: 15, color: Palette.DarkGray },
+  emptyTitle: { fontSize: 20, color: Palette.Black, textAlign: 'center' },
+  emptyBody: { fontSize: 14, lineHeight: 20, color: Palette.DarkGray, textAlign: 'center' },
 });
