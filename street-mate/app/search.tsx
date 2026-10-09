@@ -7,9 +7,11 @@ import {
   ScrollView,
   StyleSheet,
   TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
+import { FadeInDown } from 'react-native-reanimated';
+import { Touchable } from '@/components/touchable';
+import { Motion, staggerDelay } from '@/constants/motion';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppText as Text } from '@/components/app-text';
 import { IconBadge, IconButton } from '@/components/ui';
@@ -353,16 +355,18 @@ export default function SearchScreen() {
 
         <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
           {activeField === 'origin' && originFocused && originMode === 'custom' && (
-            <TouchableOpacity style={styles.row} onPress={handleUseCurrentLocation} activeOpacity={0.6}>
+            <Touchable style={styles.row} onPress={handleUseCurrentLocation} activeOpacity={0.6}>
               <IconBadge name="navigate" />
               <Text weight="medium" style={styles.rowText}>Use current location</Text>
-            </TouchableOpacity>
+            </Touchable>
           )}
 
-          {suggestions.map((item) => (
-            <TouchableOpacity
+          {suggestions.map((item, index) => (
+            <Touchable
               key={item.placeId}
               style={styles.row}
+              // New results ease in one after another; ones already showing stay put.
+              entering={FadeInDown.delay(staggerDelay(index, 24)).duration(Motion.duration.base).easing(Motion.easeOut)}
               activeOpacity={0.6}
               disabled={resolvingId !== null}
               onPress={() => handleSelect(item)}>
@@ -376,7 +380,7 @@ export default function SearchScreen() {
               ) : item.distanceMeters != null ? (
                 <Text style={styles.resultDistance}>{formatDistance(item.distanceMeters / 1000)}</Text>
               ) : null}
-            </TouchableOpacity>
+            </Touchable>
           ))}
 
           {error && (
@@ -399,7 +403,7 @@ export default function SearchScreen() {
             <>
               {activeField === 'destination' &&
                 savedWithPoint.map((p) => (
-                  <TouchableOpacity
+                  <Touchable
                     key={p.id}
                     style={styles.row}
                     activeOpacity={0.6}
@@ -409,16 +413,16 @@ export default function SearchScreen() {
                       <Text weight="medium" style={styles.resultName}>{p.label}</Text>
                       <Text numberOfLines={1} style={styles.resultAddress}>{p.address}</Text>
                     </View>
-                  </TouchableOpacity>
+                  </Touchable>
                 ))}
-              <TouchableOpacity style={styles.row} onPress={handleChooseOnMap} activeOpacity={0.6}>
+              <Touchable style={styles.row} onPress={handleChooseOnMap} activeOpacity={0.6}>
                 <IconBadge name="map" />
                 <Text weight="medium" style={styles.rowText}>Choose on map</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.row} onPress={() => router.push('/saved-places')} activeOpacity={0.6}>
+              </Touchable>
+              <Touchable style={styles.row} onPress={() => router.push('/saved-places')} activeOpacity={0.6}>
                 <IconBadge name="bookmark" />
                 <Text weight="medium" style={styles.rowText}>Saved places</Text>
-              </TouchableOpacity>
+              </Touchable>
             </>
           )}
         </ScrollView>

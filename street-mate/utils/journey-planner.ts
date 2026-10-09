@@ -84,6 +84,16 @@ export type LastMile = {
   walkMinutes: number;
 };
 
+/** Live-traffic estimate layered on top of a journey (see utils/traffic.ts). */
+export type TrafficInfo = {
+  /** A good case, with the roads moving freely. */
+  lowMinutes: number;
+  /** A bad case: heavier traffic plus a longer wait for the trotro to fill. */
+  highMinutes: number;
+  level: 'light' | 'moderate' | 'heavy';
+  updatedAt: number;
+};
+
 export type Journey = {
   id: string;
   origin: Waypoint;
@@ -98,6 +108,8 @@ export type Journey = {
   fare: FareRange;
   walkMeters: number;
   tags: string[];
+  /** Present once live traffic has been applied; `minutes` then already reflects it. */
+  traffic?: TrafficInfo;
 };
 
 export type PlanResult = {

@@ -1,5 +1,6 @@
-import { createContext, ReactNode, useContext, useState } from 'react';
+import { createContext, ReactNode, useContext } from 'react';
 import type { Journey } from '@/utils/journey-planner';
+  import { usePersistentState } from '@/hooks/use-persistent-state';
 
 // Trips the rider has actually started. Kept in memory for the session; swap the
 // useState for AsyncStorage if you want history to survive an app restart.
@@ -24,8 +25,7 @@ type Ctx = {
 const TripHistoryContext = createContext<Ctx | undefined>(undefined);
 
 export function TripHistoryProvider({ children }: { children: ReactNode }) {
-  const [trips, setTrips] = useState<TripRecord[]>([]);
-
+  const [trips, setTrips] = usePersistentState<TripRecord[]>('streetmate:trips', []);
   const addTrip = (journey: Journey) => {
     const record: TripRecord = {
       id: `${Date.now()}`,

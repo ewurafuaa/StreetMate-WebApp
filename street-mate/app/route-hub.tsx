@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { router } from 'expo-router';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Touchable } from '@/components/touchable';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText as Text } from '@/components/app-text';
-import { Icon, IconButton, ListRow, PillButton, ScreenHeader } from '@/components/ui';
+import { Icon, IconButton, ListRow, PillButton, ScreenHeader, SegmentTab } from '@/components/ui';
 import { Palette, Radius } from '@/constants/theme';
 import { CURRENT_LOCATION, searchStops } from '@/data/stops';
 import { requestLocation } from '@/utils/location-picker';
@@ -91,9 +92,7 @@ export default function RouteHubScreen() {
       {/* Two-way toggle (pill) */}
       <View style={styles.tabs}>
         {([['add', 'Add a route'], ['request', 'Request a route']] as const).map(([key, label]) => (
-          <TouchableOpacity key={key} style={[styles.tab, tab === key && styles.tabActive]} activeOpacity={0.8} onPress={() => setTab(key)}>
-            <Text weight="medium" style={[styles.tabText, tab === key && { color: Palette.White }]}>{label}</Text>
-          </TouchableOpacity>
+          <SegmentTab key={key} label={label} active={tab === key} onPress={() => setTab(key)} style={styles.tab} textStyle={styles.tabText} />
         ))}
       </View>
 
@@ -107,12 +106,12 @@ export default function RouteHubScreen() {
               <View style={styles.railSquare} />
             </View>
             <View style={{ flex: 1, gap: 8 }}>
-              <TouchableOpacity style={styles.field} activeOpacity={0.8} onPress={() => openField('start')}>
+              <Touchable style={styles.field} activeOpacity={0.8} onPress={() => openField('start')}>
                 <Text numberOfLines={1} style={startingPoint ? styles.fieldText : styles.fieldPlaceholder}>{startingPoint || 'Starting point'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.field} activeOpacity={0.8} onPress={() => openField('end')}>
+              </Touchable>
+              <Touchable style={styles.field} activeOpacity={0.8} onPress={() => openField('end')}>
                 <Text numberOfLines={1} style={endPoint ? styles.fieldText : styles.fieldPlaceholder}>{endPoint || 'End point'}</Text>
-              </TouchableOpacity>
+              </Touchable>
             </View>
             <IconButton name="swap-vertical" size={40} onPress={swap} accessibilityLabel="Swap start and end" />
           </View>

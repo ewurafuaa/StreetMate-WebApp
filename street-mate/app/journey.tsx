@@ -10,7 +10,11 @@
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Dimensions, Modal, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Animated, Dimensions, Modal, ScrollView, StyleSheet, View } from 'react-native';
+import Reanimated, { FadeIn } from 'react-native-reanimated';
+import { StopDot } from '@/components/stop-dot';
+import { Touchable } from '@/components/touchable';
+import { Motion } from '@/constants/motion';
 import MapView, { Marker } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText as Text } from '@/components/app-text';
@@ -292,9 +296,9 @@ export default function JourneyScreen() {
 
       {/* Bottom sheet */}
       <Animated.View style={[styles.sheet, { height: sheetHeight }]}>
-        <TouchableOpacity activeOpacity={0.7} onPress={toggleExpanded} style={styles.handleZone}>
+        <Touchable activeOpacity={0.7} onPress={toggleExpanded} style={styles.handleZone}>
           <View style={styles.handle} />
-        </TouchableOpacity>
+        </Touchable>
 
         {finished ? (
           <ScrollView contentContainerStyle={styles.sheetScroll} showsVerticalScrollIndicator={false}>
@@ -394,7 +398,7 @@ export default function JourneyScreen() {
 
       {/* ⋯ menu */}
       <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
-        <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={() => setMenuOpen(false)}>
+        <Touchable style={styles.backdrop} activeOpacity={1} onPress={() => setMenuOpen(false)}>
           <View style={[styles.menu, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
             <MenuItem
               icon="list"
@@ -423,7 +427,7 @@ export default function JourneyScreen() {
             />
             <MenuItem icon="close-circle" label="End journey" onPress={() => { setMenuOpen(false); endJourney(); }} />
           </View>
-        </TouchableOpacity>
+        </Touchable>
       </Modal>
 
       {/* Trip overview */}
@@ -471,25 +475,20 @@ function StopRow({
       <View style={styles.stopRail}>
         {!first && <View style={[styles.railPart, passed || state === 'current' ? styles.railDone : styles.railTodo, { top: 0, bottom: '50%' }]} />}
         {!last && <View style={[styles.railPart, passed ? styles.railDone : styles.railTodo, { top: '50%', bottom: 0 }]} />}
-        {state === 'next' ? (
-          <Animated.View style={[styles.dotNext, { opacity: pulse }]} />
-        ) : state === 'alight' ? (
-          <View style={styles.dotAlight} />
-        ) : (
-          <View
-            style={[
-              styles.dot,
-              (passed || state === 'current' || state === 'board') && styles.dotFilled,
-              passed && { backgroundColor: Palette.Placeholder, borderColor: Palette.Placeholder },
-            ]}
-          />
-        )}
+        {/* The dot morphs between states; while it is the next stop it also pulses. */}
+        <Animated.View style={{ opacity: state === 'next' ? pulse : 1 }}>
+          <StopDot state={state} />
+        </Animated.View>
       </View>
       <View style={styles.stopText}>
         <Text weight={strong ? 'bold' : 'regular'} numberOfLines={1} style={[styles.stopName, passed && { color: Palette.Placeholder }]}>
           {name}
         </Text>
-        {label ? <Text style={styles.stopLabel}>{label}</Text> : null}
+        {label ? (
+          <Reanimated.View key={label} entering={FadeIn.duration(Motion.duration.base)}>
+            <Text style={styles.stopLabel}>{label}</Text>
+          </Reanimated.View>
+        ) : null}
       </View>
     </View>
   );
@@ -517,10 +516,10 @@ function UpNext({ journey, stepIdx, steps }: { journey: NonNullable<ReturnType<t
 
 function MenuItem({ icon, label, onPress }: { icon: IconName; label: string; onPress: () => void }) {
   return (
-    <TouchableOpacity style={styles.menuItem} activeOpacity={0.7} onPress={onPress}>
+    <Touchable style={styles.menuItem} activeOpacity={0.7} onPress={onPress}>
       <IconBadge name={icon} />
       <Text weight="medium" style={styles.menuLabel}>{label}</Text>
-    </TouchableOpacity>
+    </Touchable>
   );
 }
 

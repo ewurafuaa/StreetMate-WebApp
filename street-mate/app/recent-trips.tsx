@@ -1,5 +1,6 @@
 import { router } from 'expo-router';
-import { ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
+import { Touchable } from '@/components/touchable';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppText as Text } from '@/components/app-text';
 import { EmptyState, IconBadge, ScreenHeader } from '@/components/ui';
@@ -49,9 +50,9 @@ export default function RecentTripsScreen() {
         onBack={() => router.back()}
         right={
           trips.length > 0 ? (
-            <TouchableOpacity onPress={clearTrips} hitSlop={10}>
+            <Touchable onPress={clearTrips} hitSlop={10}>
               <Text weight="medium" style={styles.clear}>Clear</Text>
-            </TouchableOpacity>
+            </Touchable>
           ) : undefined
         }
       />
@@ -70,7 +71,7 @@ export default function RecentTripsScreen() {
             <View key={section.title} style={styles.section}>
               <Text weight="bold" style={styles.sectionTitle}>{section.title}</Text>
               {section.items.map((t, i) => (
-                <TouchableOpacity
+                <Touchable
                   key={t.id}
                   activeOpacity={0.6}
                   style={[styles.row, i === section.items.length - 1 && { borderBottomWidth: 0 }]}
@@ -83,7 +84,7 @@ export default function RecentTripsScreen() {
                       {formatTripDate(t.startedAt)} · {formatMinutes(t.minutes)} · {fare(t)} · {t.rideCount} {t.rideCount === 1 ? 'trotro' : 'trotros'}
                     </Text>
                   </View>
-                </TouchableOpacity>
+                </Touchable>
               ))}
             </View>
           ))}

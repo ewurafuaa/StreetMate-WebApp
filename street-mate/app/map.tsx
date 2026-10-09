@@ -11,9 +11,9 @@ import {
   PanResponder,
   ScrollView,
   StyleSheet,
-  TouchableOpacity,
   View,
 } from 'react-native';
+import { Touchable } from '@/components/touchable';
 import MapView from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText as Text } from '@/components/app-text';
@@ -25,6 +25,7 @@ import { Palette, Radius, Shadow } from '@/constants/theme';
 import { useTripHistory } from '@/contexts/trip-history';
 import { CURRENT_LOCATION } from '@/data/stops';
 import { useCurrentLocation } from '@/hooks/use-current-location';
+import { useLiveTimes } from '@/hooks/use-live-times';
 import { useWalkingRoute } from '@/hooks/use-walking-route';
 import { setActiveJourney, setPreviewJourney } from '@/utils/journey-store';
 import type { Journey, PlanResult } from '@/utils/journey-planner';
@@ -95,7 +96,9 @@ export default function PlannerScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.destLat, params.destLng, params.originLat, params.originLng, originReady]);
 
-  const journeys = useMemo(() => result?.journeys ?? [], [result]);
+  // The planner's own estimates appear first; Google's live-traffic times replace them a moment later.
+  const planned = useMemo(() => result?.journeys ?? [], [result]);
+  const journeys = useLiveTimes(planned);
   const [tab, setTab] = useState<Tab>('best');
 
   // The planner already ranks by time (with a small penalty per change), so the first one is the
@@ -106,10 +109,11 @@ export default function PlannerScreen() {
   // Real footpath for the last stretch of the best route, so the map line follows streets.
   const lastMile = best?.lastMile ?? null;
   const { route: walkRoute } = useWalkingRoute(lastMile?.from ?? null, lastMile?.to ?? null);
-  const walkPaths = useMemo(
-    () => (walkRoute && !walkRoute.approximate ? { 'last-mile': walkRoute.path } : {}),
-    [walkRoute]
-  );
+  const walkPaths = useMemo(() => {
+    const paths: Record<string, { latitude: number; longitude: number }[]> = {};
+    if (walkRoute && !walkRoute.approximate) paths['last-mile'] = walkRoute.path;
+    return paths;
+  }, [walkRoute]);
 
   // --- Sheet (drag between three heights) ---
   const [sheetHeight] = useState(() => new Animated.Value(SNAPS[1]));
@@ -125,6 +129,8 @@ export default function PlannerScreen() {
   const snapTo = (h: number) =>
     Animated.spring(sheetHeight, { toValue: h, useNativeDriver: false, friction: 9, tension: 70 }).start();
 
+  // The refs below are only read inside gesture handlers, never during render.
+  // eslint-disable-next-line react-hooks/refs
   const [panResponder] = useState(() =>
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -153,7 +159,9 @@ export default function PlannerScreen() {
       });
     }, 150);
     return () => clearTimeout(timer);
-  }, [best, insets.top]);
+    // Re-frame only when the best route changes, not every time its times are refreshed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [best?.id, insets.top]);
 
   const openOverview = (journey: Journey) => {
     setPreviewJourney(journey);
@@ -193,7 +201,7 @@ export default function PlannerScreen() {
       {/* Back + route card */}
       <View style={[styles.topBar, { top: insets.top + 8 }]} pointerEvents="box-none">
         <IconButton name="arrow-back" floating onPress={() => router.back()} accessibilityLabel="Back" />
-        <TouchableOpacity style={styles.routeCard} activeOpacity={0.9} onPress={() => router.back()}>
+        <Touchable style={styles.routeCard} activeOpacity={0.9} onPress={() => router.back()}>
           <View style={styles.routeRail}>
             <View style={styles.routeDotOrigin} />
             <View style={styles.routeRailLine} />
@@ -203,7 +211,7 @@ export default function PlannerScreen() {
             <Text numberOfLines={1} weight="medium" style={styles.routeFrom}>{originName}</Text>
             <Text numberOfLines={1} weight="medium" style={styles.routeTo}>{destName}</Text>
           </View>
-        </TouchableOpacity>
+        </Touchable>
       </View>
 
       {/* Bottom sheet */}
@@ -243,7 +251,7 @@ export default function PlannerScreen() {
                 {(['best', 'all'] as const).map((t) => {
                   const active = tab === t;
                   return (
-                    <TouchableOpacity
+                    <Touchable
                       key={t}
                       accessibilityRole="tab"
                       accessibilityState={{ selected: active }}
@@ -253,7 +261,7 @@ export default function PlannerScreen() {
                       <Text weight="medium" style={[styles.tabText, active && styles.tabTextActive]}>
                         {t === 'best' ? 'Best route' : 'All routes'}
                       </Text>
-                    </TouchableOpacity>
+                    </Touchable>
                   );
                 })}
               </View>
@@ -267,12 +275,12 @@ export default function PlannerScreen() {
               <RouteCard journey={best} badges={routeBadges(best, journeys)} featured onPress={() => openOverview(best)} />
 
               {tab === 'best' && others.length > 0 && (
-                <TouchableOpacity style={styles.moreLink} activeOpacity={0.7} onPress={() => setTab('all')}>
+                <Touchable style={styles.moreLink} activeOpacity={0.7} onPress={() => setTab('all')}>
                   <Text weight="medium" style={styles.moreText}>
                     See {others.length} other {others.length === 1 ? 'route' : 'routes'}
                   </Text>
                   <Icon name="chevron-forward" size={16} />
-                </TouchableOpacity>
+                </Touchable>
               )}
 
               {tab === 'all' && others.length > 0 && (

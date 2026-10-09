@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, ReactNode } from 'react';
+import { createContext, useContext, ReactNode } from 'react';
+import { usePersistentState } from '@/hooks/use-persistent-state';
 
 export type SavedPlace = {
   id: string;
@@ -27,7 +28,7 @@ const initialPlaces: SavedPlace[] = [
 ];
 
 export function SavedPlacesProvider({ children }: { children: ReactNode }) {
-  const [places, setPlaces] = useState<SavedPlace[]>(initialPlaces);
+  const [places, setPlaces] = usePersistentState<SavedPlace[]>('streetmate:saved-places', initialPlaces);
 
   const addPlace = (label: string, address: string, point?: { lat: number; lng: number }) => {
     setPlaces((prev) => [...prev, { id: Date.now().toString(), label, address, icon: 'star', lat: point?.lat, lng: point?.lng }]);
